@@ -1,0 +1,96 @@
+# ======================
+# 🔐 ENV / SECRETS
+# ======================
+.env
+.env.*
+!.env.example
+
+# ======================
+# 🐍 PYTHON
+# ======================
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# ======================
+# 🌐 NODE (Next.js)
+# ======================
+node_modules/
+.next/
+out/
+
+# ======================
+# ⚙️ CELERY
+# ======================
+celerybeat-schedule
+celerybeat.pid
+
+# ======================
+# 📋 LOGS
+# ======================
+*.log
+crash_log.txt
+uvicorn_error.log
+worker_log.txt
+
+# ======================
+# 🐳 DOCKER
+# ======================
+docker-data/
+*.pid
+
+# ======================
+# 🧠 IDE
+# ======================
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ======================
+# 🧾 OS / MISC
+# ======================
+.DS_Store
+Thumbs.db
+
+# ======================
+# 🛠️ DEV SCRIPTS (not for prod)
+# ======================
+apps/api/batch_download.py
+apps/api/bulk_ingest.py
+apps/api/check_docs.py
+apps/api/check_qdrant.py
+apps/api/debug_ingestion.py
+apps/api/dedup_acts.py
+apps/api/export_ingestion_dump.py
+apps/api/fix_missing_act.py
+apps/api/list_embed.py
+apps/api/make_buckets_public.py
+apps/api/migrate_act_numbers.py
+apps/api/migrate_users.py
+apps/api/recreate_qdrant.py
+apps/api/reset_passwords.py
+apps/api/test_download_2311.pdf
+apps/api/test_env_key.py
+apps/api/test_gemini.py
+apps/api/test_presigned.py
+apps/api/test_scraper.py
+apps/api/add_task_id_col.py
+apps/api/models.txt
+apps/api/models_list.txt
+apps/api/downloaded_acts/
+patch_ingestion.py
+patch_ingestion2.py
+patch_v3.py
+start_all.py
+acts.txt
+check_docs_result.txt
+qdrant_result.txt
+ingestion_*.log

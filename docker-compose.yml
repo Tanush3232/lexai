@@ -1,0 +1,206 @@
+version: "3.9"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# LexAI · Production Docker Compose
+# Usage: copy .env.example → .env, fill in values, then:
+#   docker compose up -d --build
+# ──────────────────────────────────────────────────────────────────────────────
+
+x-api-env: &api-env
+  env_file:
+    - .env
+  environment:
+    # Internal Docker networking — services talk to each other by container name
+    POSTGRES_URL: postgresql+asyncpg://lexai:${POSTGRES_PASSWORD:-lexai}@postgres:5432/lexai
+    POSTGRES_SYNC_URL: postgresql://lexai:${POSTGRES_PASSWORD:-lexai}@postgres:5432/lexai
+    REDIS_URL: redis://redis:6379/0
+    CELERY_BROKER_URL: redis://redis:6379/1
+    CELERY_RESULT_BACKEND: redis://redis:6379/2
+    QDRANT_URL: http://qdrant:6333
+    ELASTICSEARCH_URL: http://elasticsearch:9200
+    NEO4J_URI: bolt://neo4j:7687
+    MINIO_ENDPOINT: http://minio:9000
+    # Public presigned URLs use the server's public IP (set SERVER_IP in .env)
+    MINIO_PUBLIC_URL: http://${SERVER_IP}:9000
+    CORS_ORIGINS: '["http://${SERVER_IP}", "http://${SERVER_IP}:80", "http://localhost:3000"]'
+
+services:
+
+  # ── Infrastructure ───────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: lexai_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: lexai
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lexai}
+      POSTGRES_DB: lexai
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lexai"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Not exposed publicly — only accessible within Docker network
+
+  redis:
+    image: redis:7-alpine
+    container_name: lexai_redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:v1.9.1
+    container_name: lexai_qdrant
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      QDRANT__SERVICE__HTTP_PORT: 6333
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+    container_name: lexai_elasticsearch
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.http.ssl.enabled=false
+      # Tuned for 2 GB RAM Lightsail — leaves room for other services
+      - ES_JAVA_OPTS=-Xms256m -Xmx512m
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health | grep -qv '\"status\":\"red\"'"]
+      interval: 20s
+      timeout: 10s
+      start_period: 90s
+      retries: 10
+
+  neo4j:
+    image: neo4j:5-community
+    container_name: lexai_neo4j
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-lexai_neo4j}
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_apoc_export_file_enabled: "true"
+      NEO4J_apoc_import_file_enabled: "true"
+      # Cap heap to prevent OOM on 2 GB instance
+      NEO4J_server_memory_heap_initial__size: "128m"
+      NEO4J_server_memory_heap_max__size: "256m"
+      NEO4J_server_memory_pagecache_size: "128m"
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    healthcheck:
+      test: ["CMD", "neo4j", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: lexai_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # ── Application ───────────────────────────────────────────────────────────────
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: lexai_api
+    restart: unless-stopped
+    <<: *api-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      elasticsearch:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/workers/Dockerfile
+    container_name: lexai_worker
+    restart: unless-stopped
+    <<: *api-env
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      elasticsearch:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+      args:
+        # Must be public SERVER_IP — baked into the browser bundle at build time
+        NEXT_PUBLIC_API_URL: http://${SERVER_IP}
+    container_name: lexai_web
+    restart: unless-stopped
+    depends_on:
+      - api
+
+  # ── Nginx Reverse Proxy ───────────────────────────────────────────────────────
+  # Single public entry point: port 80 routes everything
+  #   /        → web (Next.js)
+  #   /api/    → api (FastAPI)
+  #   /minio/  → minio (file downloads via presigned URL)
+
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: lexai_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      # Port 9000 is exposed separately for MinIO presigned URL downloads
+      - "9000:9000"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - web
+      - api
+      - minio
+
+volumes:
+  postgres_data:
+  redis_data:
+  qdrant_data:
+  es_data:
+  neo4j_data:
+  neo4j_logs:
+  minio_data:

@@ -1,0 +1,35 @@
+"""
+Workers requirements mapped to actual worker runtime usage.
+"""
+# Core runtime
+pydantic>=2.8.2
+pydantic-settings>=2.3.0
+sqlmodel==0.0.18
+sqlalchemy[asyncio]==2.0.30
+asyncpg==0.29.0
+
+# AI
+google-generativeai==0.5.4
+langgraph==0.1.5
+
+# Retrieval stores / graph
+qdrant-client==1.9.1
+elasticsearch[async]==8.13.0
+neo4j==5.19.0
+
+# Storage
+minio==7.2.7
+
+# Document parsing
+docling>=2.0.0
+PyMuPDF==1.24.4
+python-docx==1.1.0
+
+# Background tasks
+celery==5.4.0
+redis==5.0.4
+
+# Utilities
+structlog==24.1.0
+tenacity==8.2.3
+numpy==1.26.4
