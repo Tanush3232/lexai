@@ -21,6 +21,18 @@ genai.configure(api_key=settings.GOOGLE_API_KEY)
 _flash_model: genai.GenerativeModel | None = None
 _pro_model: genai.GenerativeModel | None = None
 
+# ─────────────────────────────────────────────
+# Safety Settings — Legal Documents
+# ─────────────────────────────────────────────
+# Set to BLOCK_NONE to prevent false-positives on standard legal
+# terminology (e.g., party disputes, harassment-adjacent terms).
+SAFETY_SETTINGS = {
+    "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE",
+    "HARM_CATEGORY_HATE_SPEECH": "BLOCK_NONE",
+    "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_NONE",
+    "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_NONE",
+}
+
 
 def get_flash_model() -> genai.GenerativeModel:
     global _flash_model
@@ -64,9 +76,16 @@ async def generate_structured(
             lambda: model.generate_content(
                 prompt,
                 generation_config=config,
+                safety_settings=SAFETY_SETTINGS,
                 request_options={"timeout": timeout},
             ),
         )
+
+        # ── Check for blocked responses ──────────────────────────────────────
+        if not response.candidates:
+            reason = getattr(response.prompt_feedback, "block_reason", "UNKNOWN")
+            logger.error("gemini.blocked_prompt", reason=reason, feature=feature_name)
+            raise ValueError(f"Gemini blocked the prompt (Reason: {reason}). Please check safety settings.")
         # ── Token tracking ────────────────────────────────────────────────────
         try:
             from app.services.usage_tracker import log_usage
@@ -113,9 +132,15 @@ async def generate_text(
         lambda: model.generate_content(
             prompt,
             generation_config=config,
+            safety_settings=SAFETY_SETTINGS,
             request_options={"timeout": 120},
         ),
     )
+
+    if not response.candidates:
+        reason = getattr(response.prompt_feedback, "block_reason", "UNKNOWN")
+        logger.error("gemini.blocked_prompt", reason=reason, feature=feature_name)
+        return f"[BLOCKED BY SAFETY FILTER: {reason}]"
     # ── Token tracking ────────────────────────────────────────────────────
     try:
         from app.services.usage_tracker import log_usage
@@ -191,6 +216,7 @@ async def extract_text_from_file(file_bytes: bytes, mime_type: str) -> str:
             None,
             lambda: model.generate_content(
                 [{"mime_type": mime_type, "data": file_bytes}, prompt],
+                safety_settings=SAFETY_SETTINGS,
                 request_options={"timeout": 300},
             ),
         )

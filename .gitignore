@@ -61,10 +61,8 @@ docker-data/
 Thumbs.db
 
 # ======================
-# 🛠️ DEV SCRIPTS (not for prod)
+# 🛠️ OLD DEV SCRIPTS (not needed in prod)
 # ======================
-apps/api/batch_download.py
-apps/api/bulk_ingest.py
 apps/api/check_docs.py
 apps/api/check_qdrant.py
 apps/api/debug_ingestion.py
@@ -90,7 +88,9 @@ patch_ingestion.py
 patch_ingestion2.py
 patch_v3.py
 start_all.py
-acts.txt
 check_docs_result.txt
 qdrant_result.txt
 ingestion_*.log
+# NOTE: batch_download.py, bulk_ingest.py, scripts/seed.py, and acts.txt
+# are PRODUCTION scripts — they are intentionally tracked in Git.
+# DO NOT add them back to .gitignore.
