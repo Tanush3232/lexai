@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import {
   Loader2, Plus, Search, BookOpen, RefreshCw, X, Upload,
   CheckCircle2, XCircle, AlertTriangle, Lock, Eye, Check, Trash2,
-  ChevronLeft, ChevronRight,
+  ChevronLeft, ChevronRight, Download,
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -279,6 +279,7 @@ export default function ActsPage() {
   const [reviewFilter, setReviewFilter] = useState("");
   const [page, setPage] = useState(1);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const limit = 10;
 
   // Debounced search
@@ -384,6 +385,20 @@ export default function ActsPage() {
     onError: (e: any) => toast.error(e.response?.data?.detail || "PDF removal failed"),
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: (actId: string) => actsApi.delete(actId),
+    onSuccess: (_, actId) => {
+      toast.success("Act deleted permanently");
+      setDeleteConfirmId(null);
+      qc.invalidateQueries({ queryKey: ["acts"] });
+      qc.invalidateQueries({ queryKey: ["acts-stats"] });
+    },
+    onError: (e: any) => {
+      toast.error(e.response?.data?.detail || "Delete failed");
+      setDeleteConfirmId(null);
+    },
+  });
+
   /* ── Handlers ── */
 
   const handleAddSearch = () => {
@@ -402,6 +417,23 @@ export default function ActsPage() {
   const invalidateAll = () => {
     qc.invalidateQueries({ queryKey: ["acts"] });
     qc.invalidateQueries({ queryKey: ["acts-stats"] });
+  };
+
+  const handleDownload = async (act: LegalAct) => {
+    if (!act.minio_path) { toast.error("No PDF available"); return; }
+    try {
+      const { data } = await actsApi.getPdfUrl(act.id);
+      // Create a temporary link to trigger browser download
+      const a = document.createElement("a");
+      a.href = data.url;
+      a.download = `${act.title}.pdf`;
+      a.target = "_blank";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } catch {
+      toast.error("Download failed");
+    }
   };
 
   /* ── Pagination helpers ── */
@@ -541,9 +573,25 @@ export default function ActsPage() {
                           <Trash2 size={13} /> Remove PDF
                         </button>
                       )}
+                      {act.minio_path && (
+                        <button
+                          className="acts-icon-btn"
+                          onClick={() => handleDownload(act)}
+                          title="Download PDF"
+                        >
+                          <Download size={14} />
+                        </button>
+                      )}
                       <Link href={`/dashboard/acts/${act.id}`} className="acts-view-btn">
                         <Eye size={13} /> View
                       </Link>
+                      <button
+                        className="acts-icon-btn acts-icon-btn-danger"
+                        onClick={() => setDeleteConfirmId(act.id)}
+                        title="Delete act permanently"
+                      >
+                        <Trash2 size={14} />
+                      </button>
                     </td>
                   </tr>
                   {expandedId === act.id && !isCompleted(act.ingestion_status) && (
@@ -641,6 +689,49 @@ export default function ActsPage() {
           </div>
         </div>
       )}
+
+      {/* Delete Confirm Modal */}
+      {deleteConfirmId && (() => {
+        const actToDelete = acts.find((a) => a.id === deleteConfirmId);
+        return (
+          <div className="acts-modal-overlay" onClick={() => !deleteMutation.isPending && setDeleteConfirmId(null)}>
+            <div className="acts-modal" style={{ maxWidth: 440 }} onClick={(e) => e.stopPropagation()}>
+              <div className="acts-modal-header">
+                <h2 style={{ color: "#ef4444" }}>Delete Act</h2>
+                <button className="acts-modal-close" onClick={() => setDeleteConfirmId(null)} disabled={deleteMutation.isPending}><X size={18} /></button>
+              </div>
+              <div className="acts-modal-body">
+                <p style={{ fontSize: 14, lineHeight: 1.6, marginBottom: 20 }}>
+                  Are you sure you want to permanently delete{" "}
+                  <strong>{actToDelete?.title || "this act"}</strong>?
+                  <br /><br />
+                  <span style={{ color: "#ef4444", fontSize: 12 }}>
+                    ⚠️ This will permanently remove the act, its PDF from storage, and all database records. This cannot be undone.
+                  </span>
+                </p>
+                <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                  <button className="btn-secondary" onClick={() => setDeleteConfirmId(null)} disabled={deleteMutation.isPending}>
+                    Cancel
+                  </button>
+                  <button
+                    style={{
+                      background: "#ef4444", color: "#fff", border: "none",
+                      borderRadius: 8, padding: "8px 20px", fontSize: 13, fontWeight: 600,
+                      cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
+                      opacity: deleteMutation.isPending ? 0.7 : 1,
+                    }}
+                    onClick={() => deleteMutation.mutate(deleteConfirmId)}
+                    disabled={deleteMutation.isPending}
+                  >
+                    {deleteMutation.isPending ? <Loader2 size={13} className="spin" /> : <Trash2 size={13} />}
+                    Delete Permanently
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

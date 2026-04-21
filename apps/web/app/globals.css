@@ -1366,6 +1366,39 @@ body {
   border-color: var(--border2);
 }
 
+/* Icon-only action buttons (download, delete) */
+.acts-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--white);
+  color: var(--text2);
+  cursor: pointer;
+  transition: all 0.12s;
+  flex-shrink: 0;
+}
+.acts-icon-btn:hover {
+  background: var(--bg);
+  color: var(--text);
+  border-color: var(--border2);
+}
+.acts-icon-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.acts-icon-btn-danger {
+  border-color: #fca5a5;
+  color: #ef4444;
+  background: #fff5f5;
+}
+.acts-icon-btn-danger:hover {
+  background: #ef4444;
+  color: white;
+  border-color: #ef4444;
+}
+
 /* Expanded Error Row */
 .acts-expanded-row {
   display: flex;

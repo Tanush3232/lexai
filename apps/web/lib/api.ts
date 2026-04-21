@@ -176,6 +176,7 @@ export const actsApi = {
   updateReview: (actId: string, data: { review_status: string | null; lock?: boolean }) =>
     api.patch(`/acts/${actId}/review`, data),
   stats: () => api.get("/acts/stats/summary"),
+  delete: (actId: string) => api.delete(`/acts/${actId}`),
 };
 
 // Users

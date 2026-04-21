@@ -659,3 +659,56 @@ async def acts_stats(
         "not_completed": total - completed,
         "reviewed": reviewed,
     }
+
+
+# ─── DELETE /api/v1/acts/{act_id} ────────────────────────────
+
+
+@router.delete("/{act_id}")
+async def delete_act(
+    act_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Permanently delete an act from everywhere:
+    1. Delete PDF from MinIO (if present)
+    2. Delete seed log rows
+    3. Delete the act DB row
+    Idempotent — safe to call even if files/rows are already gone.
+    """
+    result = await session.exec(select(LegalAct).where(LegalAct.id == act_id))
+    act = result.first()
+    if not act:
+        raise HTTPException(status_code=404, detail="Act not found")
+
+    # ── Step 1: Delete from MinIO ─────────────────────────────────────────────
+    if act.minio_path:
+        bucket = act.minio_bucket or "legal-acts"
+        path = act.minio_path.lstrip("/")
+        if path.startswith(f"{bucket}/"):
+            path = path[len(f"{bucket}/"):]
+        try:
+            client = get_storage_client()
+            client.remove_object(bucket, path)
+            logger.info("acts.delete.minio_removed", act_id=act_id, path=path)
+        except Exception as e:
+            # Non-fatal — file might already be gone
+            logger.warning("acts.delete.minio_skip", act_id=act_id, error=str(e))
+
+    # ── Step 2: Delete seed log rows ──────────────────────────────────────────
+    from app.models.legal_act import LegalActSeedLog
+    seed_logs = await session.exec(
+        select(LegalActSeedLog).where(LegalActSeedLog.handle_id == act.handle_id)
+    )
+    for log in seed_logs.all():
+        await session.delete(log)
+
+    # ── Step 3: Delete the act row ────────────────────────────────────────────
+    await log_action(session, current_user.id, "delete_act", "legal_act", act.id,
+                     details={"title": act.title})
+    await session.delete(act)
+    await session.commit()
+
+    logger.info("acts.delete.complete", act_id=act_id, title=act.title)
+    return {"id": act_id, "deleted": True}
