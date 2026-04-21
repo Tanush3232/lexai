@@ -16,9 +16,11 @@ from app.core.logging import get_logger
 logger = get_logger("storage")
 
 _client: Optional[Minio] = None
+_public_client: Optional[Minio] = None
 
 
 def get_storage_client() -> Minio:
+    """Internal MinIO client — used for upload/download within Docker network."""
     global _client
     if _client is None:
         endpoint = settings.MINIO_ENDPOINT.replace("http://", "").replace("https://", "")
@@ -30,6 +32,29 @@ def get_storage_client() -> Minio:
             secure=secure,
         )
     return _client
+
+
+def get_public_storage_client() -> Minio:
+    """
+    Public MinIO client configured with the browser-accessible hostname.
+    Use ONLY for presigned_get_object() calls.
+    The presigned URL hostname must match what the browser uses — if you
+    generate it with the internal 'minio:9000' host and then swap the host,
+    MinIO will reject it with SignatureDoesNotMatch.
+    """
+    global _public_client
+    if _public_client is None:
+        public_url = getattr(settings, "MINIO_PUBLIC_URL", settings.MINIO_ENDPOINT)
+        endpoint = public_url.replace("http://", "").replace("https://", "")
+        secure = public_url.startswith("https://")
+        _public_client = Minio(
+            endpoint,
+            access_key=settings.MINIO_ACCESS_KEY,
+            secret_key=settings.MINIO_SECRET_KEY,
+            secure=secure,
+        )
+    return _public_client
+
 
 
 def _init_storage_sync():

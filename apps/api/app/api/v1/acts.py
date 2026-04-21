@@ -412,40 +412,33 @@ async def get_act_pdf_url(
     bucket = act.minio_bucket or "legal-acts"
 
     # Strip embedded bucket prefix if accidentally stored in path.
-    # e.g. "legal-acts/acts/19949/original.pdf" → "acts/19949/original.pdf"
+    # e.g. minio_path="legal-acts/acts/19949/original.pdf" → "acts/19949/original.pdf"
     path = act.minio_path.lstrip("/")
     if path.startswith(f"{bucket}/"):
         path = path[len(f"{bucket}/"):]
 
-    logger.info("acts.pdf_url", bucket=bucket, path=path)
+    logger.info("acts.pdf_url_request", bucket=bucket, path=path)
 
-    # Generate a presigned URL (valid 4 hours).
-    # Presigned URLs are signed by MinIO — no bucket policy needed, bypasses Access Denied.
-    # We then replace MinIO's internal Docker hostname with the public-facing server hostname
-    # so the browser can open it directly.
     from datetime import timedelta
-    from urllib.parse import urlparse, urlunparse
+    from app.core.storage import get_public_storage_client
 
-    client_host = request.url.hostname  # e.g. staging.lexai.zuarione.com or LAN IP
-
+    # Use the PUBLIC MinIO client — it is configured with MINIO_PUBLIC_URL
+    # (e.g. http://staging.lexai.zuarione.com:9000).
+    # The presigned URL hostname must match what the browser hits.
+    # We MUST NOT modify this URL after generation — doing so breaks the signature.
     try:
-        client = get_storage_client()
-        presigned = client.presigned_get_object(
+        public_client = get_public_storage_client()
+        url = public_client.presigned_get_object(
             bucket_name=bucket,
             object_name=path,
             expires=timedelta(hours=4),
         )
-        # Replace the internal minio:9000 host with the public-facing host
-        parsed = urlparse(presigned)
-        url = urlunparse(parsed._replace(
-            scheme="http",
-            netloc=f"{client_host}:9000",
-        ))
-        logger.info("acts.pdf_presigned_url", url=url)
+        logger.info("acts.pdf_url_presigned", url=url[:80])
     except Exception as e:
-        # Fallback to direct public URL (bucket must be public)
-        logger.warning("acts.presigned_url_failed", error=str(e))
-        url = f"http://{client_host}:9000/{bucket}/{path}"
+        logger.warning("acts.pdf_url_presigned_failed", error=str(e))
+        # Fallback: direct URL (bucket must be public via storage.py init policy)
+        public_base = getattr(settings, "MINIO_PUBLIC_URL", f"http://{request.url.hostname}:9000")
+        url = f"{public_base}/{bucket}/{path}"
 
     return {"url": url}
 
