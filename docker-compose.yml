@@ -168,8 +168,8 @@ services:
       context: ./apps/web
       dockerfile: Dockerfile
       args:
-        # Must be public SERVER_IP — baked into the browser bundle at build time
-        NEXT_PUBLIC_API_URL: http://${SERVER_IP}
+        # Use relative path — Nginx will handle the routing to the backend
+        NEXT_PUBLIC_API_URL: /api
     container_name: lexai_web
     restart: unless-stopped
     depends_on:
