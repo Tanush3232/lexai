@@ -35,19 +35,33 @@ def get_storage_client() -> Minio:
 def _init_storage_sync():
     """Synchronous bucket init — called from executor."""
     client = get_storage_client()
-    bucket = settings.MINIO_BUCKET
-    if not client.bucket_exists(bucket):
-        client.make_bucket(bucket)
-        logger.info("storage.bucket_created", bucket=bucket)
-    else:
-        logger.info("storage.bucket_exists", bucket=bucket)
 
-    # Automatically set bucket to public read-only to avoid SignatureDoesNotMatch errors 
-    # across LAN/Docker IP mismatches when serving PDFs.
+    # Buckets that need public read-only access for browser PDF viewing
+    public_buckets = [settings.MINIO_BUCKET, "legal-acts"]
+
     import json
-    policy = {
+    public_policy_template = {
         "Version": "2012-10-17",
         "Statement": [
+            {
+                "Effect": "Allow",
+                "Principal": {"AWS": "*"},
+                "Action": ["s3:GetObject"],
+                "Resource": []  # filled per-bucket below
+            }
+        ]
+    }
+
+    for bucket in public_buckets:
+        if not client.bucket_exists(bucket):
+            client.make_bucket(bucket)
+            logger.info("storage.bucket_created", bucket=bucket)
+        else:
+            logger.info("storage.bucket_exists", bucket=bucket)
+
+        # Make bucket publicly readable so browser can open PDFs directly
+        policy = dict(public_policy_template)
+        policy["Statement"] = [
             {
                 "Effect": "Allow",
                 "Principal": {"AWS": "*"},
@@ -55,8 +69,8 @@ def _init_storage_sync():
                 "Resource": [f"arn:aws:s3:::{bucket}/*"]
             }
         ]
-    }
-    client.set_bucket_policy(bucket, json.dumps(policy))
+        client.set_bucket_policy(bucket, json.dumps(policy))
+        logger.info("storage.public_policy_set", bucket=bucket)
 
 
 async def init_storage():

@@ -410,18 +410,19 @@ async def get_act_pdf_url(
         raise HTTPException(status_code=404, detail="Act or PDF not found")
     
     # DYNAMIC HOST DETECTION:
-    # We use the hostname that the browser is currently using to talk to the API.
-    # If the user is on localhost, we use localhost:9000.
-    # If the user is on the LAN IP, we use LAN_IP:9000.
-    # This bypasses all firewall/loopback timeout issues.
+    # Use the hostname that the browser is currently using to talk to the API.
     client_host = request.url.hostname
     public_url_base = f"http://{client_host}:9000"
-    
-    bucket = act.minio_bucket or settings.MINIO_BUCKET
-    path = act.minio_path.lstrip("/")
-    
-    url = f"{public_url_base}/{bucket}/{path}"
 
+    bucket = act.minio_bucket or "legal-acts"
+
+    # Strip embedded bucket prefix if it was accidentally stored in the path.
+    # e.g. minio_path="legal-acts/acts/19949/original.pdf" → "acts/19949/original.pdf"
+    path = act.minio_path.lstrip("/")
+    if path.startswith(f"{bucket}/"):
+        path = path[len(f"{bucket}/"):]
+
+    url = f"{public_url_base}/{bucket}/{path}"
     return {"url": url}
 
 
