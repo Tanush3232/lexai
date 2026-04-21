@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { actsApi } from "@/lib/api";
+import { api, actsApi } from "@/lib/api";
 import { toast } from "sonner";
 import {
   ArrowLeft, FileText, ExternalLink, Loader2, ChevronDown, ChevronUp,
@@ -47,9 +47,23 @@ export default function ActDetailPage() {
 
   useEffect(() => {
     if (act?.minio_path && act.ingestion_status === "completed") {
-      actsApi.getPdfUrl(actId).then((r) => setPdfUrl(r.data.url)).catch(() => {});
+      // Fetch PDF bytes through authenticated API (Bearer token sent automatically by axios).
+      // Create a local Blob URL so the iframe can display it without needing
+      // MinIO public access, presigned URLs, or port 9000 exposure.
+      api.get(`/acts/${actId}/pdf`, { responseType: "blob" })
+        .then((r) => {
+          const blob = new Blob([r.data], { type: "application/pdf" });
+          const blobUrl = URL.createObjectURL(blob);
+          setPdfUrl(blobUrl);
+        })
+        .catch(() => {});
     }
+    // Revoke Blob URL on cleanup to free memory
+    return () => {
+      if (pdfUrl?.startsWith("blob:")) URL.revokeObjectURL(pdfUrl);
+    };
   }, [act?.minio_path, act?.ingestion_status, actId]);
+
 
   const reviewMutation = useMutation({
     mutationFn: (data: { review_status: string | null; lock?: boolean }) =>

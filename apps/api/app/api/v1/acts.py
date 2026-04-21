@@ -404,44 +404,73 @@ async def get_act_pdf_url(
     session: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ):
+    """Returns the presigned URL or direct URL for the PDF."""
     result = await session.exec(select(LegalAct).where(LegalAct.id == act_id))
     act = result.first()
     if not act or not act.minio_path:
         raise HTTPException(status_code=404, detail="Act or PDF not found")
 
     bucket = act.minio_bucket or "legal-acts"
-
-    # Strip embedded bucket prefix if accidentally stored in path.
-    # e.g. minio_path="legal-acts/acts/19949/original.pdf" → "acts/19949/original.pdf"
     path = act.minio_path.lstrip("/")
     if path.startswith(f"{bucket}/"):
         path = path[len(f"{bucket}/"):]
 
-    logger.info("acts.pdf_url_request", bucket=bucket, path=path)
+    # Return the streaming endpoint URL — frontend fetches as blob (auth-safe)
+    return {"url": f"/api/v1/acts/{act_id}/pdf"}
 
-    from datetime import timedelta
-    from app.core.storage import get_public_storage_client
 
-    # Use the PUBLIC MinIO client — it is configured with MINIO_PUBLIC_URL
-    # (e.g. http://staging.lexai.zuarione.com:9000).
-    # The presigned URL hostname must match what the browser hits.
-    # We MUST NOT modify this URL after generation — doing so breaks the signature.
+@router.get("/{act_id}/pdf")
+async def stream_act_pdf(
+    act_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Stream the PDF bytes directly through the API.
+    - Authenticated via Bearer token (axios handles this).
+    - Frontend creates a Blob URL from the response and passes it to <iframe>.
+    - No MinIO public URL / presigning / port 9000 needed.
+    """
+    import asyncio
+    from fastapi.responses import Response as FastAPIResponse
+    from app.core.storage import get_storage_client
+
+    result = await session.exec(select(LegalAct).where(LegalAct.id == act_id))
+    act = result.first()
+    if not act or not act.minio_path:
+        raise HTTPException(status_code=404, detail="Act or PDF not found")
+
+    bucket = act.minio_bucket or "legal-acts"
+    path = act.minio_path.lstrip("/")
+    if path.startswith(f"{bucket}/"):
+        path = path[len(f"{bucket}/"):]
+
+    logger.info("acts.pdf_stream", bucket=bucket, path=path)
+
     try:
-        public_client = get_public_storage_client()
-        url = public_client.presigned_get_object(
-            bucket_name=bucket,
-            object_name=path,
-            expires=timedelta(hours=4),
-        )
-        logger.info("acts.pdf_url_presigned", url=url[:80])
+        loop = asyncio.get_running_loop()
+        client = get_storage_client()
+
+        def _fetch():
+            resp = client.get_object(bucket, path)
+            try:
+                data = resp.read()
+            finally:
+                resp.close()
+                resp.release_conn()
+            return data
+
+        pdf_bytes = await loop.run_in_executor(None, _fetch)
     except Exception as e:
-        logger.warning("acts.pdf_url_presigned_failed", error=str(e))
-        # Fallback: direct URL (bucket must be public via storage.py init policy)
-        public_base = getattr(settings, "MINIO_PUBLIC_URL", f"http://{request.url.hostname}:9000")
-        url = f"{public_base}/{bucket}/{path}"
+        logger.error("acts.pdf_stream_error", error=str(e), bucket=bucket, path=path)
+        raise HTTPException(status_code=404, detail=f"PDF not found in storage: {e}")
 
-    return {"url": url}
-
+    filename = f"{act.handle_id or act_id}.pdf"
+    return FastAPIResponse(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"inline; filename=\"{filename}\""},
+    )
 
 
 # ─── POST /api/v1/acts/{act_id}/upload-pdf ───────────────────
