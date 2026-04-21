@@ -47,22 +47,21 @@ export default function ActDetailPage() {
 
   useEffect(() => {
     if (act?.minio_path && act.ingestion_status === "completed") {
-      // Fetch PDF bytes through authenticated API (Bearer token sent automatically by axios).
-      // Create a local Blob URL so the iframe can display it without needing
-      // MinIO public access, presigned URLs, or port 9000 exposure.
       api.get(`/acts/${actId}/pdf`, { responseType: "blob" })
         .then((r) => {
           const blob = new Blob([r.data], { type: "application/pdf" });
-          const blobUrl = URL.createObjectURL(blob);
-          setPdfUrl(blobUrl);
+          setPdfUrl(URL.createObjectURL(blob));
         })
-        .catch(() => {});
+        .catch((e) => {
+          console.error("PDF fetch failed:", e?.response?.status, e?.response?.data);
+          toast.error(`PDF load failed: ${e?.response?.status ?? "network error"}`);
+        });
     }
-    // Revoke Blob URL on cleanup to free memory
     return () => {
       if (pdfUrl?.startsWith("blob:")) URL.revokeObjectURL(pdfUrl);
     };
   }, [act?.minio_path, act?.ingestion_status, actId]);
+
 
 
   const reviewMutation = useMutation({
