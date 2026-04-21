@@ -400,7 +400,7 @@ async def get_act_status(
 @router.get("/{act_id}/pdf-url")
 async def get_act_pdf_url(
     act_id: str,
-    request: Request, # Add request to detect host
+    request: Request,
     session: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ):
@@ -408,23 +408,46 @@ async def get_act_pdf_url(
     act = result.first()
     if not act or not act.minio_path:
         raise HTTPException(status_code=404, detail="Act or PDF not found")
-    
-    # DYNAMIC HOST DETECTION:
-    # Use the hostname that the browser is currently using to talk to the API.
-    client_host = request.url.hostname
-    public_url_base = f"http://{client_host}:9000"
 
     bucket = act.minio_bucket or "legal-acts"
 
-    # Strip embedded bucket prefix if it was accidentally stored in the path.
-    # e.g. minio_path="legal-acts/acts/19949/original.pdf" → "acts/19949/original.pdf"
+    # Strip embedded bucket prefix if accidentally stored in path.
+    # e.g. "legal-acts/acts/19949/original.pdf" → "acts/19949/original.pdf"
     path = act.minio_path.lstrip("/")
     if path.startswith(f"{bucket}/"):
         path = path[len(f"{bucket}/"):]
 
-    url = f"{public_url_base}/{bucket}/{path}"
-    return {"url": url}
+    logger.info("acts.pdf_url", bucket=bucket, path=path)
 
+    # Generate a presigned URL (valid 4 hours).
+    # Presigned URLs are signed by MinIO — no bucket policy needed, bypasses Access Denied.
+    # We then replace MinIO's internal Docker hostname with the public-facing server hostname
+    # so the browser can open it directly.
+    from datetime import timedelta
+    from urllib.parse import urlparse, urlunparse
+
+    client_host = request.url.hostname  # e.g. staging.lexai.zuarione.com or LAN IP
+
+    try:
+        client = get_storage_client()
+        presigned = client.presigned_get_object(
+            bucket_name=bucket,
+            object_name=path,
+            expires=timedelta(hours=4),
+        )
+        # Replace the internal minio:9000 host with the public-facing host
+        parsed = urlparse(presigned)
+        url = urlunparse(parsed._replace(
+            scheme="http",
+            netloc=f"{client_host}:9000",
+        ))
+        logger.info("acts.pdf_presigned_url", url=url)
+    except Exception as e:
+        # Fallback to direct public URL (bucket must be public)
+        logger.warning("acts.presigned_url_failed", error=str(e))
+        url = f"http://{client_host}:9000/{bucket}/{path}"
+
+    return {"url": url}
 
 
 
