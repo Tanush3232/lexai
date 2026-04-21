@@ -9,17 +9,18 @@ export const api = axios.create({
 // Resolve baseURL lazily at request time (avoids SSR/client hydration mismatch)
 api.interceptors.request.use((config) => {
   if (!config.baseURL) {
-    // 1. Get base from env var (or fallback to localhost)
-    let base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-    
-    // 2. If we are in the browser, and the configured base is "localhost", 
-    // but the user is accessing the app via a LAN IP (e.g. 192.168.X.X),
-    // dynamically override localhost with their actual hostname.
-    if (typeof window !== "undefined" && base.includes("localhost")) {
-      base = `${window.location.protocol}//${window.location.hostname}:8000`;
+    const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+    // Production: NEXT_PUBLIC_API_URL="/api" (relative) → baseURL = "/api/v1"
+    // Local dev:  NEXT_PUBLIC_API_URL="http://localhost:8000" → baseURL = "http://localhost:8000/api/v1"
+    // This prevents the /api/api/v1 double-prefix bug when behind Nginx.
+    if (base.startsWith("/")) {
+      // Relative path (production behind Nginx) — just append /v1
+      config.baseURL = `${base}/v1`;
+    } else {
+      // Absolute URL (local dev) — append /api/v1 as before
+      config.baseURL = `${base}/api/v1`;
     }
-    
-    config.baseURL = `${base}/api/v1`;
   }
   const token = useAuthStore.getState().token;
   if (token) {
