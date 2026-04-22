@@ -605,7 +605,7 @@ class GeminiStructuredOCRExtractor:
             from google.generativeai.types import GenerationConfig
 
             genai.configure(api_key=settings.GOOGLE_API_KEY)
-            model = genai.GenerativeModel(settings.GEMINI_PRO_MODEL)
+            model = genai.GenerativeModel(settings.GEMINI_MODEL)
             config = GenerationConfig(
                 temperature=0.1,
                 response_mime_type="application/json",
@@ -629,7 +629,7 @@ class GeminiStructuredOCRExtractor:
                 usage = getattr(response, "usage_metadata", None)
                 inp = (getattr(usage, "prompt_token_count", 0) or 0) if usage else 0
                 out = (getattr(usage, "candidates_token_count", 0) or 0) if usage else 0
-                await log_usage(settings.GEMINI_PRO_MODEL, "gemini_ocr_structured", inp, out)
+                await log_usage(settings.GEMINI_MODEL, "gemini_ocr_structured", inp, out)
             except Exception:
                 pass
 

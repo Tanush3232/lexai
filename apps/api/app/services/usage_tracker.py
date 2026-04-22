@@ -13,6 +13,26 @@ logger = get_logger("usage_tracker")
 # Set to True once the table has been confirmed to exist this process lifetime.
 _table_ready: bool = False
 
+def _get_loop_engine():
+    """Retrieve or create a NullPool engine for the current event loop."""
+    import asyncio
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import NullPool
+    from app.core.config import settings
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        raise RuntimeError("No event loop running - cannot log usage")
+    
+    if not hasattr(loop, "_lexai_usage_engine"):
+        loop._lexai_usage_engine = create_async_engine(
+            settings.POSTGRES_URL, 
+            poolclass=NullPool, 
+            echo=False
+        )
+    return loop._lexai_usage_engine
+
 # ── Pricing tables (USD per 1 Million tokens) ───────────────────────────────
 # Flat-rate models (no context-window tier).
 PRICING: dict[str, dict[str, float]] = {
@@ -41,10 +61,18 @@ _PRO_25_TIER = {
     "short": {"input": 1.25,  "output": 10.00},
     "long":  {"input": 2.50,  "output": 15.00},
 }
+
+_PRO_31_TIER = {
+    "threshold": 200_000,
+    "short": {"input": 2.00,  "output": 12.00},
+    "long":  {"input": 4.00,  "output": 18.00},
+}
+
 TIERED_PRICING: dict[str, dict] = {
     "gemini-2.5-pro":                _PRO_25_TIER,
     "gemini-2.5-pro-exp-03-25":      _PRO_25_TIER,
     "gemini-2.5-pro-preview-03-25":  _PRO_25_TIER,
+    "gemini-3.1-pro-preview":        _PRO_31_TIER,
 }
 
 
@@ -161,7 +189,7 @@ async def log_usage(
             user_id=user_id,
         )
 
-        engine = create_async_engine(settings.POSTGRES_URL, poolclass=NullPool, echo=False)
+        engine = _get_loop_engine()
         try:
             # Ensure the table exists — only runs once per process lifetime.
             if not _table_ready:
@@ -175,8 +203,8 @@ async def log_usage(
             async with Session() as session:
                 session.add(record)
                 await session.commit()
-        finally:
-            await engine.dispose()
+        except Exception:
+            raise
 
         logger.debug(
             "usage_tracker.logged",

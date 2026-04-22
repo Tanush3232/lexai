@@ -33,8 +33,8 @@ logger = get_logger("translation_workflow_v2")
 
 # Maximum characters per block before splitting
 MAX_BLOCK_CHARS = 6000
-# Reduced from 4 to 2: High concurrency on heavy Pro models triggers 504 Timeouts on the API side
-PRO_SEMAPHORE_LIMIT = 2
+# Increased back to 4: Since we are using the stable 2.5 Pro model, we can handle higher concurrency to speed up large 50+ page documents.
+PRO_SEMAPHORE_LIMIT = 4
 # Enable validation pass — set False to skip for speed
 ENABLE_VALIDATION = True
 
@@ -55,20 +55,62 @@ class TranslationState(TypedDict):
     translated_metadata: Dict[str, str] # Translated metadata
     validation_report: Dict     # Output of validation pass
     result: Dict                # Final assembled result (compatible with old schema)
+    # Internal keys (must be in schema to persist across nodes)
+    _file_bytes: Optional[bytes]
+    _filename: Optional[str]
 
 
 # ─────────────────────────────────────────────
 # Cancellation Helpers
 # ─────────────────────────────────────────────
 
+async def _get_safe_session():
+    """
+    Create a loop-safe session using NullPool for background tasks.
+    Ties the engine lifecycle directly to the current event loop.
+    """
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from sqlalchemy.pool import NullPool
+    from app.core.config import settings
+    from sqlmodel.ext.asyncio.session import AsyncSession
+    
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No loop? We can't really run async DB ops.
+        raise RuntimeError("No event loop running - cannot create safe session")
+
+    # Store engine on the loop object itself to ensure it is 
+    # garbage collected when the loop (Celery task) finishes.
+    if not hasattr(loop, "_lexai_translation_engine"):
+        loop._lexai_translation_engine = create_async_engine(
+            settings.POSTGRES_URL,
+            poolclass=NullPool,
+            echo=False,
+            connect_args={"command_timeout": 10}
+        )
+    
+    engine = loop._lexai_translation_engine
+    
+    factory = async_sessionmaker(
+        bind=engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+        autocommit=False,
+        autoflush=False,
+    )
+    return factory()
+
+
 async def check_cancellation(job_id: str | None):
     """Stop if job status changed to error/cancelled in DB. Fail-safe: stop if check fails."""
     if not job_id: return
     try:
-        from app.core.database import AsyncSessionLocal
         from app.models.translation import TranslationJob
         from sqlmodel import select
-        async with AsyncSessionLocal() as session:
+        
+        # Use safe loop-local session instead of global pooled engine
+        async with await _get_safe_session() as session:
             res = await session.exec(select(TranslationJob).where(TranslationJob.id == job_id))
             job = res.first()
             if not job or job.status not in ["pending", "processing"]:
@@ -77,7 +119,9 @@ async def check_cancellation(job_id: str | None):
     except RuntimeError:
         raise
     except Exception as e:
-        logger.error("translation.cancel_check_failed", error=str(e))
+        # If DB check fails, we continue but log it. 
+        # Prevents 'NoneType object has no attribute send' from crashing the worker.
+        logger.error("translation.cancel_check_failed", job_id=job_id, error=str(e))
 
 
 # ─────────────────────────────────────────────

@@ -207,6 +207,10 @@ def run_translation(self, job_id: str, document_id: str):
                     )
 
                 except Exception as e:
+                    if isinstance(e, RuntimeError) and "cancelled or missing" in str(e):
+                        logger.info("translation.aborted_gracefully", job_id=job_id)
+                        return
+                    
                     logger.error("translation.failed", job_id=job_id, error=str(e))
                     try:
                         await session.rollback()
@@ -228,6 +232,10 @@ def run_translation(self, job_id: str, document_id: str):
     try:
         asyncio.run(_run())
     except Exception as e:
+        if isinstance(e, RuntimeError) and "cancelled or missing" in str(e):
+            logger.info("translation.task_terminated_safely", job_id=job_id)
+            return
+
         logger.error("translation.loop_error", job_id=job_id, error=str(e))
         raise
 

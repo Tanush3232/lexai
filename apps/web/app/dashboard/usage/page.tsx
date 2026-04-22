@@ -236,8 +236,22 @@ export default function UsagePage() {
         </button>
         {showPricing && (
           <div style={{ padding: "0 20px 16px 20px" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-              {/* Pro card */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px" }}>
+              {/* 3.1 Pro Preview card */}
+              <div style={{ border: "1px solid var(--border)", borderRadius: "8px", padding: "14px 16px" }}>
+                <div style={{ fontWeight: 700, fontSize: "13px", marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
+                  <span style={{ display: "inline-block", width: "8px", height: "8px", borderRadius: "50%", background: "#e11d48" }} />
+                  Gemini 3.1 Pro
+                </div>
+                <div style={{ fontSize: "12px", lineHeight: "1.8", color: "var(--text2)" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}><span>Input (≤200k prompt)</span><span style={{ fontWeight: 600 }}>$2.00 /1M</span></div>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}><span>Input (&gt;200k prompt)</span><span style={{ fontWeight: 600 }}>$4.00 /1M</span></div>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}><span>Output (≤200k prompt)</span><span style={{ fontWeight: 600 }}>$12.00 /1M</span></div>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}><span>Output (&gt;200k prompt)</span><span style={{ fontWeight: 600 }}>$18.00 /1M</span></div>
+                  <div style={{ marginTop: "6px", fontSize: "11px", color: "var(--text3)" }}>Output includes thinking tokens. Tier based on prompt size.</div>
+                </div>
+              </div>
+              {/* 2.5 Pro card */}
               <div style={{ border: "1px solid var(--border)", borderRadius: "8px", padding: "14px 16px" }}>
                 <div style={{ fontWeight: 700, fontSize: "13px", marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
                   <span style={{ display: "inline-block", width: "8px", height: "8px", borderRadius: "50%", background: "#7c3aed" }} />
