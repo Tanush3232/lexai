@@ -125,7 +125,7 @@ def _upload_sync(object_name: str, data: bytes, content_type: str) -> str:
 async def upload_file(
     object_name: str, data: bytes, content_type: str = "application/octet-stream"
 ) -> str:
-    """Upload bytes to MinIO, return object URL (non-blocking)."""
+    """Upload bytes to MinIO default bucket, return object URL (non-blocking)."""
     loop = asyncio.get_running_loop()
     try:
         url = await loop.run_in_executor(None, _upload_sync, object_name, data, content_type)
@@ -133,6 +133,34 @@ async def upload_file(
         return url
     except S3Error as e:
         logger.error("storage.upload_error", object_name=object_name, error=str(e))
+        raise
+
+
+async def upload_to_bucket(
+    bucket: str, object_name: str, data: bytes, content_type: str = "application/octet-stream"
+) -> str:
+    """
+    Upload bytes to an EXPLICIT bucket (e.g. 'legal-acts').
+    Use this instead of upload_file() when you need control over which bucket.
+    """
+    def _sync():
+        client = get_storage_client()
+        client.put_object(
+            bucket,
+            object_name,
+            io.BytesIO(data),
+            length=len(data),
+            content_type=content_type,
+        )
+        return f"{settings.MINIO_ENDPOINT}/{bucket}/{object_name}"
+
+    loop = asyncio.get_running_loop()
+    try:
+        url = await loop.run_in_executor(None, _sync)
+        logger.info("storage.upload_to_bucket_success", bucket=bucket, object_name=object_name, bytes=len(data))
+        return url
+    except S3Error as e:
+        logger.error("storage.upload_to_bucket_error", bucket=bucket, object_name=object_name, error=str(e))
         raise
 
 

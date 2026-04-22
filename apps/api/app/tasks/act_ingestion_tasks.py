@@ -39,7 +39,7 @@ def ingest_legal_act(self, act_id: str, act_title: str, handle_id: str = None):
 
     async def _run():
         from app.core.database import AsyncSessionLocal
-        from app.core.storage import upload_file
+        from app.core.storage import upload_to_bucket
         from app.models.legal_act import LegalAct, LegalActSeedLog
         from app.services.indiacode_scraper import search_act, download_act_pdf, _normalize_title
         from app.services.ocr_service import extract_text_from_pdf
@@ -191,10 +191,11 @@ def ingest_legal_act(self, act_id: str, act_title: str, handle_id: str = None):
                 act.bitstream_url = dl_result.bitstream_url
 
                 # ── Step 3: Upload to MinIO ──
+                BUCKET = "legal-acts"
                 minio_path = f"acts/{current_handle_id}/original.pdf"
-                await upload_file(minio_path, dl_result.pdf_bytes, "application/pdf")
+                await upload_to_bucket(BUCKET, minio_path, dl_result.pdf_bytes, "application/pdf")
                 act.minio_path = minio_path
-                act.minio_bucket = "legal-acts"
+                act.minio_bucket = BUCKET
                 session.add(act)
                 await session.commit()
 

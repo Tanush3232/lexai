@@ -430,10 +430,12 @@ async def stream_act_pdf(
     - Authenticated via Bearer token (axios handles this).
     - Frontend creates a Blob URL from the response and passes it to <iframe>.
     - No MinIO public URL / presigning / port 9000 needed.
+    - Tries DB bucket first, then lexai-documents as fallback for legacy ingested files.
     """
     import asyncio
     from fastapi.responses import Response as FastAPIResponse
     from app.core.storage import get_storage_client
+    from app.core.config import settings
 
     result = await session.exec(select(LegalAct).where(LegalAct.id == act_id))
     act = result.first()
@@ -442,28 +444,52 @@ async def stream_act_pdf(
 
     bucket = act.minio_bucket or "legal-acts"
     path = act.minio_path.lstrip("/")
+    # Strip embedded bucket prefix if stored in path
     if path.startswith(f"{bucket}/"):
         path = path[len(f"{bucket}/"):]
 
+    # Buckets to try in order:
+    # 1. DB-stored bucket (legal-acts for ingested, lexai-documents for uploaded)
+    # 2. The default upload_file bucket (lexai-documents) — fallback for old ingested files
+    #    that were mistakenly uploaded there before this bug was fixed.
+    fallback_bucket = settings.MINIO_BUCKET  # lexai-documents
+    buckets_to_try = [bucket]
+    if fallback_bucket != bucket:
+        buckets_to_try.append(fallback_bucket)
+
     logger.info("acts.pdf_stream", bucket=bucket, path=path)
 
-    try:
-        loop = asyncio.get_running_loop()
-        client = get_storage_client()
+    loop = asyncio.get_running_loop()
+    client = get_storage_client()
+    pdf_bytes = None
+    last_error = None
 
-        def _fetch():
-            resp = client.get_object(bucket, path)
-            try:
-                data = resp.read()
-            finally:
-                resp.close()
-                resp.release_conn()
-            return data
+    for try_bucket in buckets_to_try:
+        try_path = path
+        # Also try stripping the fallback bucket prefix if it's in the path
+        if try_path.startswith(f"{try_bucket}/"):
+            try_path = try_path[len(f"{try_bucket}/"):]
 
-        pdf_bytes = await loop.run_in_executor(None, _fetch)
-    except Exception as e:
-        logger.error("acts.pdf_stream_error", error=str(e), bucket=bucket, path=path)
-        raise HTTPException(status_code=404, detail=f"PDF not found in storage: {e}")
+        try:
+            def _fetch(b=try_bucket, p=try_path):
+                resp = client.get_object(b, p)
+                try:
+                    data = resp.read()
+                finally:
+                    resp.close()
+                    resp.release_conn()
+                return data
+
+            pdf_bytes = await loop.run_in_executor(None, _fetch)
+            logger.info("acts.pdf_stream_found", bucket=try_bucket, path=try_path)
+            break  # found it
+        except Exception as e:
+            last_error = e
+            logger.warning("acts.pdf_stream_bucket_miss", bucket=try_bucket, path=try_path, error=str(e))
+
+    if pdf_bytes is None:
+        logger.error("acts.pdf_stream_error", error=str(last_error), bucket=bucket, path=path)
+        raise HTTPException(status_code=404, detail=f"PDF not found in storage (tried {buckets_to_try}): {last_error}")
 
     filename = f"{act.handle_id or act_id}.pdf"
     return FastAPIResponse(
