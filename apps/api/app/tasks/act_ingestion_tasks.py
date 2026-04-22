@@ -74,6 +74,9 @@ def ingest_legal_act(self, act_id: str, act_title: str, handle_id: str = None):
                         return
 
                     if search_result.status == "needs_review":
+                        # Low confidence match — but still ATTEMPT download.
+                        # We do NOT stop here: if the PDF downloads fine, we mark
+                        # completed. If it fails, we fall through to failed.
                         best = search_result.best_match
                         existing_owner = await session.exec(
                             select(LegalAct).where(
@@ -82,33 +85,35 @@ def ingest_legal_act(self, act_id: str, act_title: str, handle_id: str = None):
                             )
                         )
                         owner = existing_owner.first()
-                        act.ingestion_status = "needs_review"
-                        act.confidence_score = best.confidence_score
-                        act.handle_id = None if owner else best.handle_id
-                        # Never overwrite our custom LEX-XXXXX unique IDs with IndiaCode numbers
-                        if not (act.act_number and str(act.act_number).startswith("LEX-")):
-                            act.act_number = best.act_number
-                        act.enactment_date = best.enactment_date
-                        act.indiacode_url = search_result.indiacode_url
                         if owner:
+                            # CONFLICT — genuinely cannot use this handle
+                            act.ingestion_status = "needs_review"
+                            act.confidence_score = best.confidence_score
+                            act.handle_id = None
+                            if not (act.act_number and str(act.act_number).startswith("LEX-")):
+                                act.act_number = best.act_number
+                            act.enactment_date = best.enactment_date
+                            act.indiacode_url = search_result.indiacode_url
                             act.error_message = (
                                 f"Fuzzy match score {best.confidence_score} — candidate handle "
                                 f"{best.handle_id} already linked to '{owner.title}'"
                             )
-                        else:
-                            act.error_message = f"Fuzzy match score {best.confidence_score} — needs manual review"
+                            session.add(act)
+                            await session.commit()
+                            await _log_seed(
+                                session, act_title, best.title, None,
+                                best.confidence_score, "needs_review", act.error_message,
+                            )
+                            return
+                        # No conflict — set handle_id and continue to download
+                        act.handle_id = best.handle_id
+                        if not (act.act_number and str(act.act_number).startswith("LEX-")):
+                            act.act_number = best.act_number
+                        act.enactment_date = best.enactment_date
+                        act.confidence_score = best.confidence_score
+                        act.indiacode_url = search_result.indiacode_url
                         session.add(act)
                         await session.commit()
-                        await _log_seed(
-                            session,
-                            act_title,
-                            best.title,
-                            None if owner else best.handle_id,
-                            best.confidence_score,
-                            "needs_review",
-                            act.error_message if owner else None,
-                        )
-                        return
 
                     if search_result.status == "failed":
                         act.ingestion_status = "failed"

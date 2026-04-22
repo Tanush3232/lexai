@@ -58,7 +58,7 @@ MAX_OCR_PAGES     = 500      # skip Gemini OCR for acts with more pages (too big
 MAX_GEMINI_MB     = 18       # Gemini inline PDF limit (20 MB hard limit — leave margin)
 
 # ── Retry policy ───────────────────────────────────────────────────────────────
-_RETRY_STATUSES   = {"failed", "not_found", "needs_review"}
+_RETRY_STATUSES   = {"failed", "not_found", "needs_review", "pdf_unavailable"}
 _INFLIGHT_STATUSES = {"pending", "searching", "downloading", "ocr_processing"}
 _REMOVABLE_STATUSES = _RETRY_STATUSES | _INFLIGHT_STATUSES | {"pdf_unavailable"}
 
@@ -521,13 +521,54 @@ def _ingest_one_inner(
                     return "pdf_unavailable", msg
 
                 if dl.status != "completed" or not dl.pdf_bytes:
-                    msg = dl.error_message or "Download returned no bytes"
-                    LOG.error(f"         ✗ DOWNLOAD FAILED: {msg[:120]}")
-                    _update_act(db, act, ingestion_status="failed",
-                                error_message=msg, bitstream_url=dl.bitstream_url)
-                    _log_seed(db, act_title, best.title, handle_id,
-                              best.confidence_score, "failed", msg)
-                    return "failed", msg
+                    # ── Fallback: try candidates 2 and 3 ──────────────────────
+                    LOG.warning(
+                        f"         ⚠ Primary candidate ({handle_id}) failed: {dl.error_message} "
+                        f"— trying {len(sr.candidates) - 1} alternate candidate(s)…"
+                    )
+                    fallback_candidates = [
+                        c for c in sr.candidates[1:4]  # try up to 3 more
+                        if c.handle_id != handle_id
+                    ]
+                    dl = None
+                    for alt in fallback_candidates:
+                        LOG.info(
+                            f"         ↳ Trying alt candidate: '{alt.title}' "
+                            f"(score={alt.confidence_score}, handle={alt.handle_id})"
+                        )
+                        # Check no conflict for alt handle_id
+                        alt_owner = db.exec(
+                            select(LegalAct).where(
+                                LegalAct.handle_id == alt.handle_id,
+                                LegalAct.id != act.id,
+                            )
+                        ).first()
+                        if alt_owner:
+                            LOG.warning(f"         ↳ handle {alt.handle_id} already owned by '{alt_owner.title}' — skip")
+                            continue
+
+                        alt_dl = download_act_pdf(alt.handle_id)
+                        if alt_dl.status == "completed" and alt_dl.pdf_bytes:
+                            dl = alt_dl
+                            handle_id = alt.handle_id
+                            minio_path = f"acts/{handle_id}/original.pdf"
+                            LOG.info(f"         ✓ Got PDF from alt candidate handle={handle_id}")
+                            _update_act(db, act,
+                                        handle_id=handle_id,
+                                        act_number=alt.act_number,
+                                        enactment_date=alt.enactment_date,
+                                        confidence_score=alt.confidence_score)
+                            break
+
+                    if dl is None or dl.status != "completed" or not dl.pdf_bytes:
+                        final_dl = dl or alt_dl if fallback_candidates else None
+                        msg = (final_dl.error_message if final_dl else "Download failed, no valid candidates")
+                        LOG.error(f"         ✗ ALL CANDIDATES FAILED: {msg[:120]}")
+                        _update_act(db, act, ingestion_status="failed",
+                                    error_message=msg)
+                        _log_seed(db, act_title, best.title, handle_id,
+                                  best.confidence_score, "failed", msg)
+                        return "failed", msg
 
                 pdf_bytes = dl.pdf_bytes
                 LOG.info(f"         ✓ Downloaded: {len(pdf_bytes):,} bytes ({len(pdf_bytes)/1_048_576:.1f} MB)")
@@ -579,7 +620,9 @@ def _ingest_one_inner(
 
             # ── Step 5: Mark completed ─────────────────────────────────────────
             elapsed = time.time() - t0
-            final_status = "completed" if sr.status != "needs_review" else "needs_review"
+            # Always mark as COMPLETED if PDF was downloaded and OCR done.
+            # "needs_review" search score is informational only — do not block completion.
+            final_status = "completed"
             _update_act(db, act,
                         ingestion_status=final_status,
                         pdf_text=text,

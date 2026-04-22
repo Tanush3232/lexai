@@ -208,7 +208,7 @@ def search_act(act_name: str) -> ScrapeResult:
         if best.confidence_score >= 85:
             result.best_match = best
             result.status = "matched"
-        elif best.confidence_score >= 60:
+        elif best.confidence_score >= 50:  # was 60 — try these too, user can verify
             result.best_match = best
             result.status = "needs_review"
         else:
@@ -224,9 +224,12 @@ def search_act(act_name: str) -> ScrapeResult:
 
 def download_act_pdf(handle_id: str) -> ScrapeResult:
     """
-    Given a handle_id, visit the act detail page, find the PDF bitstream link,
-    and download the PDF bytes.
+    Given a handle_id, visit the act detail page, collect ALL bitstream PDF links,
+    then try them in priority order: English first, then null/numeric, then Hindi.
+    Validates PDF by magic bytes. Retries up to 3x on network errors.
     """
+    import urllib.parse as _urlparse
+
     result = ScrapeResult()
     session = _create_session()
 
@@ -235,7 +238,6 @@ def download_act_pdf(handle_id: str) -> ScrapeResult:
         result.error_message = "Failed to initialize session"
         return result
 
-    # Get act detail page
     detail_url = f"{BASE_URL}/handle/123456789/{handle_id}"
     try:
         resp = session.get(detail_url, timeout=30)
@@ -246,42 +248,53 @@ def download_act_pdf(handle_id: str) -> ScrapeResult:
         result.error_message = f"Detail page request failed: {e}"
         return result
 
-    # Find PDF bitstream link
-    try:
-        soup = BeautifulSoup(resp.text, "html.parser")
-        pdf_href = None
-        for a_tag in soup.find_all("a", href=True):
-            href = a_tag["href"]
-            # Strip #fragment before extension check (NIC appends #search=...)
-            href_no_frag = href.split("#")[0]
-            if "/bitstream/" in href and href_no_frag.lower().endswith(".pdf"):
-                # Prefer English PDF: filename starts with A not H (Hindi)
-                filename = href_no_frag.split("/")[-1].upper()
-                if not filename.startswith("H"):
-                    pdf_href = href_no_frag
-                    break
-        # Fallback: any .pdf bitstream
-        if not pdf_href:
-            for a_tag in soup.find_all("a", href=True):
-                href = a_tag["href"]
-                href_no_frag = href.split("#")[0]
-                if "/bitstream/" in href and href_no_frag.lower().endswith(".pdf"):
-                    pdf_href = href_no_frag
-                    break
+    result.indiacode_url = detail_url
 
-        if not pdf_href:
-            # Check if IndiaCode explicitly says the PDF is temporarily unavailable
-            page_text = soup.get_text(" ", strip=True).lower()
-            if "under updation" in page_text or "will be uploaded shortly" in page_text:
-                result.status = "pdf_unavailable"
-                result.error_message = "PDF not available – Act under updation"
+    # ── Collect ALL bitstream links ─────────────────────────────────────────
+    soup = BeautifulSoup(resp.text, "html.parser")
+    seen_hrefs: set = set()
+    english_pdfs: list = []  # highest priority
+    hindi_pdfs: list = []    # last resort
+    fallback_bitstreams: list = []  # bitstream links without .pdf extension
+
+    for a_tag in soup.find_all("a", href=True):
+        href_raw = a_tag["href"].strip()
+        href_clean = href_raw.split("#")[0].strip()  # strip #fragment
+        if "/bitstream/" not in href_clean or href_clean in seen_hrefs:
+            continue
+        seen_hrefs.add(href_clean)
+
+        href_lower = href_clean.lower()
+        if href_lower.endswith(".pdf"):
+            # Decode URL for accurate filename check
+            raw_filename = _urlparse.unquote(href_clean.split("/")[-1]).upper()
+            # NIC convention: Hindi PDFs → filename starts with H followed by
+            # underscore or digit (H_ACT_123.pdf, H123.pdf). 'HO', 'HOME' etc are not Hindi.
+            if re.match(r'^H[_\d]', raw_filename) or raw_filename.upper().startswith("HINDI"):
+                hindi_pdfs.append(href_clean)
             else:
-                result.status = "failed"
-                result.error_message = "No PDF bitstream link found on detail page"
-            result.indiacode_url = detail_url
-            return result
+                # English, null.pdf, numeric, A_ACT_123.pdf → all treated as English
+                english_pdfs.append(href_clean)
+        elif "/bitstream/" in href_clean:
+            # No .pdf extension — might still be a PDF (some NIC links lack extension)
+            fallback_bitstreams.append(href_clean)
 
-        # Build full URL
+    # Order: English → fallback → Hindi
+    to_try = english_pdfs + fallback_bitstreams + hindi_pdfs
+
+    if not to_try:
+        page_text = soup.get_text(" ", strip=True).lower()
+        if "under updation" in page_text or "will be uploaded shortly" in page_text:
+            result.status = "pdf_unavailable"
+            result.error_message = "PDF not available – Act under updation"
+        else:
+            result.status = "failed"
+            result.error_message = "No PDF bitstream link found on detail page"
+        return result
+
+    # ── Try each link, validate PDF, retry on network error ────────────────
+    last_error = None
+    for pdf_href in to_try:
         if pdf_href.startswith("/"):
             pdf_url = f"{BASE_URL}{pdf_href}"
         elif pdf_href.startswith("http"):
@@ -289,25 +302,48 @@ def download_act_pdf(handle_id: str) -> ScrapeResult:
         else:
             pdf_url = f"{BASE_URL}/{pdf_href}"
 
-        result.bitstream_url = pdf_url
-        result.indiacode_url = detail_url
-        time.sleep(REQUEST_DELAY)
-    except Exception as e:
-        result.status = "failed"
-        result.error_message = f"PDF link extraction failed: {e}"
-        return result
+        for attempt in range(3):
+            try:
+                time.sleep(REQUEST_DELAY * (attempt + 1))
+                pdf_resp = session.get(pdf_url, stream=False, timeout=120)
+                if pdf_resp.status_code == 404:
+                    last_error = f"404 for {pdf_url}"
+                    break  # dead link — try next
+                pdf_resp.raise_for_status()
+                pdf_data = pdf_resp.content
+                content_type = pdf_resp.headers.get("content-type", "").lower()
 
-    # Download PDF
-    try:
-        pdf_resp = session.get(pdf_url, stream=True, timeout=120)
-        pdf_resp.raise_for_status()
-        result.pdf_bytes = pdf_resp.content
-        result.status = "completed"
-        time.sleep(REQUEST_DELAY)
-    except Exception as e:
-        result.status = "failed"
-        result.error_message = f"PDF download failed: {e}"
+                # Validate: magic bytes %PDF OR content-type says pdf, AND reasonable size
+                is_pdf = (
+                    pdf_data[:4] == b"%PDF"
+                    or "pdf" in content_type
+                )
+                if is_pdf and len(pdf_data) > 1_000:
+                    result.pdf_bytes = pdf_data
+                    result.bitstream_url = pdf_url
+                    result.status = "completed"
+                    logger.info(
+                        "scraper.pdf_downloaded",
+                        handle_id=handle_id,
+                        url=pdf_url,
+                        bytes=len(pdf_data),
+                    )
+                    return result
+                else:
+                    last_error = f"Invalid PDF content from {pdf_url} (size={len(pdf_data)}, ct={content_type})"
+                    break  # bad content from this URL — try next
+            except Exception as e:
+                last_error = str(e)
+                if attempt < 2:
+                    time.sleep(1.5 * (attempt + 1))
+                    logger.warning("scraper.retry", attempt=attempt + 1, url=pdf_url, error=str(e))
+                # on last attempt: fall through to try next href
 
+    result.status = "failed"
+    result.error_message = (
+        f"All {len(to_try)} PDF link(s) tried, none produced valid PDF. "
+        f"Last error: {last_error}"
+    )
     return result
 
 
