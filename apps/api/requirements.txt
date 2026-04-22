@@ -61,3 +61,4 @@ black==24.4.2
 
 # PDF Generation
 reportlab==4.4.10
+psycopg2-binary==2.9.9
