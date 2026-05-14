@@ -657,7 +657,9 @@ def _build_pdf(
             if html_tbl and "<table" in html_tbl.lower():
                 # Parse the HTML into rows for ReportLab
                 import re as _re2
-                strip_tags = lambda s: _re2.sub(r'<[^>]+>', '', s).strip()
+                # Replace <br> with newline BEFORE stripping other tags
+                strip_br = lambda s: _re2.sub(r'<br\s*/?>', '\n', s, flags=_re2.I)
+                strip_tags = lambda s: _re2.sub(r'<[^>]+>', '', strip_br(s)).strip()
                 rows_html: list = []
                 for tr in _re2.findall(r'<tr[^>]*>(.*?)</tr>', html_tbl, _re2.I | _re2.S):
                     cells_raw = _re2.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', tr, _re2.I | _re2.S)
