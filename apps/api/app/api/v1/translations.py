@@ -657,13 +657,14 @@ def _build_pdf(
             if html_tbl and "<table" in html_tbl.lower():
                 # Parse the HTML into rows for ReportLab
                 import re as _re2
-                # Replace <br> with newline BEFORE stripping other tags
-                strip_br = lambda s: _re2.sub(r'<br\s*/?>', '\n', s, flags=_re2.I)
-                strip_tags = lambda s: _re2.sub(r'<[^>]+>', '', strip_br(s)).strip()
                 rows_html: list = []
                 for tr in _re2.findall(r'<tr[^>]*>(.*?)</tr>', html_tbl, _re2.I | _re2.S):
                     cells_raw = _re2.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', tr, _re2.I | _re2.S)
-                    cells_clean = [strip_tags(c) for c in cells_raw]
+                    cells_clean = []
+                    for c in cells_raw:
+                        c_no_br = _re2.sub(r'<br\s*/?>', '\n', c, flags=_re2.I)
+                        c_no_tags = _re2.sub(r'<[^>]+>', '', c_no_br).strip()
+                        cells_clean.append(c_no_tags)
                     if cells_clean:
                         rows_html.append(cells_clean)
                 if rows_html:
@@ -687,7 +688,7 @@ def _build_pdf(
 
         if btype == "signatures":
             story.append(Spacer(1, 10))
-            story.append(HRFlowable(width="60%", thickness=0.5, color=GREY, align="LEFT"))
+            story.append(HRFlowable(width="60%", thickness=0.5, color=GREY, hAlign="LEFT"))
             story.append(Paragraph(clean_txt, body))
             continue
 

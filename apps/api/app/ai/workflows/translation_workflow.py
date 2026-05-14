@@ -389,9 +389,11 @@ async def translate_blocks(state: TranslationState) -> TranslationState:
         rows_out = []
         for tr in _re_h.findall(r'<tr[^>]*>(.*?)</tr>', html, _re_h.I | _re_h.S):
             cells = _re_h.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', tr, _re_h.I | _re_h.S)
-            # Replace <br> with \n, then strip inner HTML tags to get plain text per cell
-            strip_br = lambda s: _re_h.sub(r'<br\s*/?>', '\n', s, flags=_re_h.I)
-            clean = [_re_h.sub(r'<[^>]+>', '', strip_br(c)).strip() for c in cells]
+            clean = []
+            for c in cells:
+                c_no_br = _re_h.sub(r'<br\s*/?>', '\n', c, flags=_re_h.I)
+                c_no_tags = _re_h.sub(r'<[^>]+>', '', c_no_br).strip()
+                clean.append(c_no_tags)
             if clean:
                 rows_out.append(clean)
         return rows_out
