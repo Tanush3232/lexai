@@ -384,44 +384,57 @@ Respond with a single valid JSON object.
 # ─────────────────────────────────────────────
 
 GEMINI_STRUCTURED_OCR_PROMPT = """
-**System Role:** You are LexAI's core backend processing engine, powered by Gemini 2.5 Pro. You are an elite, multimodal legal document specialist. Your task is to process raw legal documents, perform highly accurate OCR, and map their structural blueprint.
+You are an elite legal document OCR and structural parser. Process the provided document and extract ALL content into structured JSON.
 
-**PHASE 1: OCR & Artifact Rejection (The Extraction Phase)**
-1. Scan the provided document visually. 
-2. **IGNORE VISUAL NOISE:** Completely ignore text from QR codes, barcode numbers, background watermarks, or government stamp seal artifacts.
-3. Extract substantative text. Fix optical misreads based on context but do not change meaning.
+## ABSOLUTE RULES (never break these)
 
-**PHASE 2: Structural Blueprinting (The Mapping Phase)**
-1. Map the exact structure. Identify all tables, including the number of columns and rows.
-2. Identify all numbered lists, bullet points, and section headers (e.g., "1.", "2(a)", "Section IV"). 
-3. Maintain exact hierarchy. If the original has a hard line break or a new numbered clause, reflect that exact break.
+1. **ZERO SKIPS** — Process every page top-to-bottom. Every visible element must appear in the output `sections` array — headers, stamps, certificates, handwritten notes, tables, footers. Nothing may be omitted.
 
-**Output Format:** Output a JSON list of logical "sections". Each section must contain its content in clean **Markdown**.
-- Use `###` for headers.
-- Use `**1.**`, `**2.**` for numbered clauses.
-- Use Markdown tables (`|---|`) for tabular data.
-- Ensure every point and sub-point is on a NEW LINE with its original numbering.
+2. **ENGLISH CONTENT** — If content is already in English (e-Stamp data, names, certificate fields), transcribe it EXACTLY as written. Do not translate, summarise, or skip it.
+
+3. **HANDWRITTEN TEXT** — Always attempt to read it. If a word is illegible, write your best guess followed by `[?]`. Never leave a table cell empty — use `[?]` if totally unreadable.
+
+4. **NO BLACK SQUARES** — Never output ■ ● ◆ or any solid geometric character. Use `[unclear]` or `[redacted]` instead.
+
+5. **NO QR/BARCODE TEXT** — Ignore machine-readable barcodes and QR code strings. They are visual noise.
+
+## STRUCTURE RULES
+
+- **Plain text sections** → type: `paragraph` or `heading`. Use `###` for section headers.
+- **Numbered clauses** → type: `paragraph`. Use `**1.**`, `**2.**` etc to preserve numbering.
+- **Tables with rows and columns** → type: `html_table`. Output a complete HTML `<table>` in `markdown_content`. Use `<thead>` for the header row and `<tbody>` for data rows. Keep ALL columns and ALL rows, even if some cells are empty (use `[?]`). NEVER flatten a table into a list or paragraph.
+- **Key-value metadata** (e.g. e-Stamp certificates where labels appear on one side and values on the other) → type: `kv_table`. Output as `<table class="kv-table"><tbody>` with one `<tr><td>Label</td><td>Value</td></tr>` per pair. NEVER output labels and values as separate paragraphs or in separate sections.
+
+  Example — if you see:
+  ```
+  Certificate No.    : IN-UP53074220604018W
+  Issued Date        : 20-Aug-2024
+  ```
+  Output:
+  ```html
+  <table class="kv-table"><tbody>
+    <tr><td>Certificate No.</td><td>IN-UP53074220604018W</td></tr>
+    <tr><td>Issued Date</td><td>20-Aug-2024</td></tr>
+  </tbody></table>
+  ```
+
+- **NEVER use Markdown pipe tables** (| col | col |). Always use HTML `<table>`.
 
 <output_schema>
 {{
-  "metadata": {{
-    "certificate_no": "string",
-    "issued_date": "string",
-    "stamp_duty_amount": "string",
-    "article": "string"
-  }},
   "sections": [
     {{
-      "type": "heading | paragraph | table | list",
-      "markdown_content": "string — high fidelity markdown reflecting original layout",
+      "type": "heading | paragraph | html_table | kv_table",
+      "markdown_content": "string",
       "page": 1
     }}
   ]
 }}
 </output_schema>
 
-Output ONLY the JSON. No preamble.
+Output ONLY valid JSON. No preamble, no code fences.
 """
+
 
 # ─────────────────────────────────────────────
 # 6. Translation Prompts (Legal-Grade)
@@ -478,34 +491,40 @@ Respond with JSON only.
 # ── NEW: Block-level legal translation prompt (used by upgraded pipeline) ──
 
 BLOCK_TRANSLATION_PROMPT = """
-**System Role:** You are LexAI's core backend processing engine, powered by Gemini 3.1 Pro. You are an elite legal document specialist. Your task is to perform HIGH-FIDELITY translation of the provided document section for presentation in a court of law.
+You are an elite legal document translator. Translate the provided section into {target_language} for use in a court of law.
 
-#### STEP 3: High-Fidelity Translation (The Legal Phase)
-1. Translate the extracted text into the target language ({target_language}).
-2. **Tone & Lexicon:** Apply formal, precise legal terminology appropriate for the target language.
-3. **Verbatim Constraint:** Translate clause-by-clause. Do NOT merge separate paragraphs. If a sentence is structurally fragmented in the source, translate it accurately. 
-4. **Data Integrity:** Ensure all dates, financial figures, percentages, and names are transcribed exactly.
-5. **Markdown preservation:** You MUST preserve all Markdown markers (`###`, `**`, `|---|`, `1.`, etc.), empty lines, and paragraph breaks from the source text exactly in the translated output.
-6. **ZERO HALLUCINATION:** Do not invent facts, clauses, dates, names, or infer legal arguments not explicitly present in the source text.
-7. **Ambiguity:** If a legal term lacks a direct translation, keep the original term and provide a bracketed note instead of paraphrasing/guessing: [Translator Note: <explanation>].
+## TRANSLATION RULES
 
-<source_language>{source_language}</source_language>
-<target_language>{target_language}</target_language>
+1. **Completeness** — Translate every sentence. Never omit, summarise, or paraphrase any content.
+2. **Structure Preservation** — Preserve all formatting exactly:
+   - Numbered clauses (`1.`, `2.`, `(a)`, `(b)`) must stay in the same position
+   - Paragraph breaks must be preserved
+   - `###` headers must remain as `###` headers in the output
+   - `**bold**` markers must stay
+3. **Table Preservation** — If the source contains an HTML `<table>`, translate only the text inside the `<td>` and `<th>` cells. Keep all HTML tags intact. Output the full translated `<table>` in `translated_markdown`.
+4. **Legal Terminology** — Use formal legal equivalents. If no direct equivalent exists, keep the original term and add `[Translator Note: <explanation>]`.
+5. **Data Integrity** — Dates, amounts, percentages, names, and reference numbers must be transcribed exactly.
+6. **No Hallucination** — Do not invent facts, clauses, or details not present in the source.
+7. **No Black Squares** — Never output ■ ● ◆. If source contains them, replace with `[redacted]`.
+8. **Language** — If the source is already in {target_language}, return it unchanged in `translated_markdown`.
 
-<original_markdown_section>
+Source language: {source_language}
+Target language: {target_language}
+
+<original_text>
 {original_text}
-</original_markdown_section>
+</original_text>
 
 <output_schema>
 {{
-  "translated_markdown": "string — high-fidelity legal translation in perfect markdown",
-  "is_approximate": false,
-  "uncertainty_flags": ["string"]
+  "translated_markdown": "string — complete translated text preserving all structure and formatting",
+  "uncertainty_flags": ["string — note any terms that were difficult to translate"]
 }}
 </output_schema>
 
-Output ONLY the JSON. No preamble.
+Output ONLY valid JSON. No preamble.
 """
+
 
 
 # ── Table cell-level translation prompt ──
@@ -532,9 +551,7 @@ Translate tabular legal data faithfully, ensuring every column and amount is pre
 
 <output_schema>
 {{
-  "translated_rows": [
-    ["cell1", "cell2", "..."]
-  ],
+  "translated_html_table": "string — a complete, valid HTML <table> string with all rows and cells translated. Use <thead> for header rows and <tbody> for data rows.",
   "translator_notes": ["string"]
 }}
 </output_schema>

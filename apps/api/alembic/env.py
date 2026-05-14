@@ -11,6 +11,10 @@ from sqlmodel import SQLModel
 # Import all models so they register with SQLModel metadata
 from app.models import user, folder, document, chat, draft, translation, audit  # noqa
 from app.models.legal_act import LegalAct, LegalActSeedLog  # noqa
+# Legal Ticketing System models
+from app.models import ticket, message  # noqa
+# Web Search models
+from app.models import web_search  # noqa
 from app.core.config import settings
 
 config = context.config

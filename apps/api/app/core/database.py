@@ -42,8 +42,12 @@ async def init_db():
     from app.models.clause import Clause  # noqa
     from app.models.llm_usage import LLMUsageLog  # noqa
     from app.models.legal_act import LegalAct, LegalActSeedLog  # noqa
+    # Legal Ticketing System
+    from app.models import ticket, message  # noqa
+    from app.models.web_search import WebSearchSession, WebSearchCitation  # noqa
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
+
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:

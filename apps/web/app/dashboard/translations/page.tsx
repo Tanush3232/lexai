@@ -6,6 +6,129 @@ import { toast } from "sonner";
 import { X, Loader2, Folder, ChevronDown, Save, Trash2, CheckCircle, AlertTriangle, Languages, ArrowLeft, FileText, Plus } from "lucide-react";
 import { useAuthStore } from "@/lib/stores/auth-store";
 
+// ─── HTML-safe section renderer ───────────────────────────────────────────────
+
+function markdownTableToHTML(text: string) {
+  const lines = text.trim().split("\n");
+  if (lines.length < 2) return text;
+  
+  const hasPipes = lines.some(l => l.includes("|"));
+  const hasSeparator = lines.some(l => /\|[-: ]+\|/.test(l));
+  
+  if (!hasPipes || !hasSeparator) return text;
+
+  let html = "<table class='markdown-pipe-table'><thead>";
+  let inBody = false;
+  
+  for (const line of lines) {
+    if (/\|[-: ]+\|/.test(line)) {
+      html += "</thead><tbody>";
+      inBody = true;
+      continue;
+    }
+    const cells = line.split("|").filter((_, i, arr) => i > 0 && i < arr.length - 1);
+    if (cells.length === 0) continue;
+    
+    html += "<tr>";
+    for (const cell of cells) {
+      html += inBody ? `<td>${cell.trim()}</td>` : `<th>${cell.trim()}</th>`;
+    }
+    html += "</tr>";
+  }
+  html += "</tbody></table>";
+  return html;
+}
+
+function parseMarkdown(text: string) {
+  if (!text) return "";
+  const clean = text.replace(/[\u25A0-\u25FF\u25CF\u2022\u00B7]/g, "");
+  
+  let processed = clean;
+  if (processed.includes("|")) {
+    processed = processed.split("\n\n").map(part => {
+      if (part.includes("|") && part.includes("--")) {
+        return markdownTableToHTML(part);
+      }
+      return part;
+    }).join("\n\n");
+  }
+
+  return processed
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(.*?)\*/g, "<em>$1</em>")
+    .replace(/^###\s+(.*)$/gm, "<h3 style='font-size:14px;font-weight:700;margin-top:12px;margin-bottom:6px;'>$1</h3>")
+    .replace(/^##\s+(.*)$/gm, "<h2 style='font-size:15px;font-weight:700;margin-top:14px;margin-bottom:8px;'>$1</h2>")
+    .replace(/^#\s+(.*)$/gm, "<h1 style='font-size:16px;font-weight:700;margin-top:16px;margin-bottom:10px;'>$1</h1>")
+    .replace(/\n/g, "<br/>");
+}
+
+function BlockRenderer({ block, isTranslated }: { block: any, isTranslated: boolean }) {
+  const type = block.type || "paragraph";
+  
+  let content = "";
+  if (type === "html_table" || type === "kv_table" || type === "table") {
+    if (isTranslated) {
+      // Priority: dedicated HTML table field → translated_content (set by our fix) → original content
+      content = block.translated_html_table || block.translated_content || block.markdown_content || block.content || "";
+    } else {
+      // Original view: show original HTML
+      content = block.markdown_content || block.content || "";
+    }
+  } else {
+    content = isTranslated 
+      ? (block.translated_content || block.content || "")
+      : (block.content || "");
+  }
+
+  const notes = isTranslated && block.uncertainty_flags ? block.uncertainty_flags : [];
+
+  if (!content && type !== "page_break") return null;
+
+  let renderedContent;
+  switch (type) {
+    case "paragraph":
+    case "heading":
+    case "list":
+    case "document_title":
+      renderedContent = <div dangerouslySetInnerHTML={{ __html: parseMarkdown(content) }} />;
+      break;
+    case "html_table":
+    case "kv_table":
+    case "table":
+      // Content is already HTML — inject directly, do NOT run through parseMarkdown
+      renderedContent = (
+        <div 
+          className="html-table-section" 
+          dangerouslySetInnerHTML={{ __html: content }} 
+        />
+      );
+      break;
+    case "page_break":
+      renderedContent = <hr style={{ margin: "24px 0", borderColor: "var(--border)" }} />;
+      break;
+    case "signatures":
+      renderedContent = <div style={{ marginTop: "24px", fontStyle: "italic" }} dangerouslySetInnerHTML={{ __html: parseMarkdown(content) }} />;
+      break;
+    default:
+      console.warn("Unrecognised block type:", type, block);
+      renderedContent = <div>{content}</div>;
+  }
+
+  return (
+    <div style={{ marginBottom: "20px" }}>
+      {renderedContent}
+      {notes.map((n: string, i: number) => (
+        <div key={i} style={{ fontSize: "11px", fontStyle: "italic", color: "var(--amber)", marginTop: "6px" }}>
+          Note: {n.replace(/[\u25A0-\u25FF\u25CF\u2022\u00B7]/g, "")}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const ACTIVE_JOB_KEY = "lexai_active_translation_job_id";
@@ -470,7 +593,10 @@ export default function TranslationsPage() {
   };
 
   const parsedSections = activeJob?.structure_map ? (() => { try { return JSON.parse(activeJob.structure_map); } catch { return null; } })() : null;
-  const flags = activeJob?.uncertainty_flags ? (() => { try { return JSON.parse(activeJob.uncertainty_flags); } catch { return []; } })() : [];
+  const flagsData = activeJob?.uncertainty_flags ? (() => { try { return JSON.parse(activeJob.uncertainty_flags); } catch { return {}; } })() : {};
+  const flags = flagsData.flags || [];
+  const translatedBlocks = flagsData.translated_blocks || [];
+  const useBlocks = translatedBlocks.length > 0;
 
   // ── VIEW step ──────────────────────────────────────────────────────────────
   if (step === "view" && activeJob) {
@@ -579,12 +705,16 @@ export default function TranslationsPage() {
                   ORIGINAL — {activeJob.source_language || "Source"}
                 </div>
                 <div style={{ padding: "24px", fontSize: "13px", lineHeight: "1.6", maxHeight: "60vh", overflowY: "auto" }}>
-                  {parsedSections ? parsedSections.map((s: any, i: number) => (
-                    <div key={i} style={{ marginBottom: "20px" }}>
-                      {s.original_heading && <div style={{ fontWeight: 700, marginBottom: "8px" }}>{s.original_heading}</div>}
-                      <div>{s.original_text}</div>
-                    </div>
-                  )) : activeJob.original_text}
+                  {useBlocks ? (
+                    translatedBlocks.map((b: any, i: number) => <BlockRenderer key={i} block={b} isTranslated={false} />)
+                  ) : parsedSections ? (
+                    parsedSections.map((s: any, i: number) => (
+                      <div key={i} style={{ marginBottom: "20px" }}>
+                        {s.original_heading && <div style={{ fontWeight: 700, marginBottom: "8px" }}>{s.original_heading}</div>}
+                        <BlockRenderer block={{ type: "paragraph", content: s.original_text }} isTranslated={false} />
+                      </div>
+                    ))
+                  ) : activeJob.original_text}
                 </div>
               </div>
 
@@ -593,15 +723,21 @@ export default function TranslationsPage() {
                   TRANSLATED — {activeJob.target_language}
                 </div>
                 <div style={{ padding: "24px", fontSize: "13px", lineHeight: "1.6", maxHeight: "60vh", overflowY: "auto" }}>
-                  {parsedSections ? parsedSections.map((s: any, i: number) => (
-                    <div key={i} style={{ marginBottom: "20px" }}>
-                      {s.translated_heading && <div style={{ fontWeight: 700, color: "var(--accent)", marginBottom: "8px" }}>{s.translated_heading}</div>}
-                      <div style={{ color: "var(--text)" }}>{s.translated_text}</div>
-                      {s.translator_notes && s.translator_notes.map((n: string, ni: number) => (
-                        <div key={ni} style={{ fontSize: "11px", fontStyle: "italic", color: "var(--text3)", marginTop: "6px" }}>Note: {n}</div>
-                      ))}
-                    </div>
-                  )) : activeJob.translated_text}
+                  {useBlocks ? (
+                    translatedBlocks.map((b: any, i: number) => <BlockRenderer key={i} block={b} isTranslated={true} />)
+                  ) : parsedSections ? (
+                    parsedSections.map((s: any, i: number) => (
+                      <div key={i} style={{ marginBottom: "20px" }}>
+                        {s.translated_heading && <div style={{ fontWeight: 700, color: "var(--accent)", marginBottom: "8px" }}>{s.translated_heading}</div>}
+                        <div style={{ color: "var(--text)" }}>
+                          <BlockRenderer block={{ type: "paragraph", translated_content: s.translated_text }} isTranslated={true} />
+                        </div>
+                        {s.translator_notes && s.translator_notes.map((n: string, ni: number) => (
+                          <div key={ni} style={{ fontSize: "11px", fontStyle: "italic", color: "var(--text3)", marginTop: "6px" }}>Note: {n}</div>
+                        ))}
+                      </div>
+                    ))
+                  ) : activeJob.translated_text}
                 </div>
               </div>
             </div>

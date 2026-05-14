@@ -68,14 +68,33 @@ class Settings(BaseSettings):
     EMBEDDING_DIMENSION: int = 3072
 
     # LLM models
-    GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_MODEL: str = "gemini-2.5-pro"
     GEMINI_PRO_MODEL: str = "gemini-2.5-pro"
-    MAX_CONTEXT_TOKENS: int = 100000
+    MAX_CONTEXT_TOKENS: int = 200000
 
     # Agent settings
     AGENT_MAX_STEPS: int = 5
     AGENT_MAX_RETRIES: int = 2
     VECTORLESS_MAX_PAGES: int = 50
+
+    # ── Email / Outlook (Legal Ticketing System) ──────────────────────────────
+    EMAIL_HOST: str = "smtp.office365.com"
+    EMAIL_PORT: int = 587
+    EMAIL_USER: str = ""
+    EMAIL_PASS: str = ""
+
+    # ── Microsoft Graph API (Webhook / Ingestion) ─────────────────────────────
+    # Used to register change-notification subscriptions on the shared mailbox.
+    # Grant: Mail.Read (Application) on the Azure app registration.
+    GRAPH_TENANT_ID: str = ""        # Azure AD tenant ID
+    GRAPH_CLIENT_ID: str = ""        # App (client) ID
+    GRAPH_CLIENT_SECRET: str = ""    # Client secret value
+    # The mailbox being watched (same as EMAIL_USER in most setups)
+    GRAPH_MAILBOX: str = ""          # e.g. app.info@adventz.com
+    # Public HTTPS URL Alembic will call back to — must be reachable by Microsoft
+    GRAPH_WEBHOOK_URL: str = ""      # e.g. https://api.yourdomain.com/api/v1/webhooks/graph
+    # Shared secret Microsoft sends in every notification for authenticity check
+    GRAPH_WEBHOOK_SECRET: str = "lexai-webhook-secret"
 
 
 settings = Settings()

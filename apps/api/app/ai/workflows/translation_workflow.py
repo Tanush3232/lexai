@@ -275,11 +275,6 @@ async def translate_blocks(state: TranslationState) -> TranslationState:
             prompt = BLOCK_TRANSLATION_PROMPT.format(
                 source_language=src,
                 target_language=tgt,
-                block_type=block.get("type", "paragraph"),
-                block_index=idx + 1,
-                total_blocks=total,
-                nearest_heading=heading_context[idx] if idx < len(heading_context) else "",
-                section_context=block.get("original_heading", ""),
                 original_text=chunk,
             )
             async with sem:
@@ -346,7 +341,7 @@ async def translate_blocks(state: TranslationState) -> TranslationState:
                     temperature=0.05,
                     feature_name="translation_table",
                 )
-                translated_rows_text = result.get("translated_rows", rows_as_text)
+                translated_html = result.get("translated_html_table", "")
             except Exception as e:
                 logger.warning("translation.table_pro_failed_falling_back_to_flash", idx=idx, error=str(e))
                 try:
@@ -356,44 +351,74 @@ async def translate_blocks(state: TranslationState) -> TranslationState:
                         temperature=0.05,
                         feature_name="translation_table_fallback",
                     )
-                    translated_rows_text = result.get("translated_rows", rows_as_text)
+                    translated_html = result.get("translated_html_table", "")
                 except Exception as fallback_e:
                     logger.error(
                         "translation.table_failed", idx=idx, error=str(fallback_e)
                     )
-                    translated_rows_text = rows_as_text
+                    translated_html = ""
 
-        # Merge translated text back into cell objects
+        # If we got an HTML table back, store it directly; also keep the legacy
+        # translated_table_rows for the PDF generator.
         translated_table_rows = []
         for r_idx, original_row in enumerate(table_rows):
             translated_row = []
             for c_idx, original_cell in enumerate(original_row):
-                try:
-                    translated_text = translated_rows_text[r_idx][c_idx]
-                except (IndexError, TypeError):
-                    translated_text = original_cell.get("text", "")
                 translated_row.append({
                     **original_cell,
-                    "translated_text": translated_text,
+                    "translated_text": original_cell.get("text", ""),
                 })
             translated_table_rows.append(translated_row)
 
+        result = {} if not isinstance(result, dict) else result  # ensure result is always dict
+
+        # Store translated HTML as translated_content too, so BlockRenderer always finds it
         return {
             **block,
+            "translated_html_table": translated_html,
+            "translated_content": translated_html,   # <-- critical: BlockRenderer reads this
             "translated_table_rows": translated_table_rows,
-            "translator_notes": result.get("translator_notes", []) if "result" in dir() else [],
+            "translator_notes": result.get("translator_notes", []),
         }
+
+    def _html_to_rows(html: str) -> List[List[str]]:
+        """Extract a 2D list of strings from an HTML table string."""
+        import re as _re_h
+        if not html:
+            return []
+        rows_out = []
+        for tr in _re_h.findall(r'<tr[^>]*>(.*?)</tr>', html, _re_h.I | _re_h.S):
+            cells = _re_h.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', tr, _re_h.I | _re_h.S)
+            # Strip inner HTML tags to get plain text per cell
+            clean = [_re_h.sub(r'<[^>]+>', '', c).strip() for c in cells]
+            if clean:
+                rows_out.append(clean)
+        return rows_out
 
     async def _dispatch(block: Dict, idx: int) -> Dict:
         await check_cancellation(job_id)
         btype = block.get("type", "paragraph")
-        if btype == "table":
+
+        # Tables with structured table_rows: use dedicated table translator
+        if btype == "table" and block.get("table_rows"):
             return await _translate_table_block(block, idx)
-        elif btype in ("page_break",):
-            return {**block, "translated_content": ""}
-        else:
-            # document_title, signatures, heading, paragraph, list all go through text translator
+
+        # html_table / kv_table: parse the HTML into rows and use table translator
+        if btype in ("html_table", "kv_table"):
+            html_content = block.get("content", "")
+            rows_from_html = _html_to_rows(html_content)
+            if rows_from_html:
+                # Build a fake block with table_rows so _translate_table_block can process it
+                tbl_block = {**block, "table_rows": [[{"text": c, "is_header": ridx == 0} for c in row] for ridx, row in enumerate(rows_from_html)]}
+                return await _translate_table_block(tbl_block, idx)
+            # If HTML parsing fails, fall back to text translation with explicit instruction
             return await _translate_text_block(block, idx)
+
+        if btype in ("page_break",):
+            return {**block, "translated_content": ""}
+
+        # paragraph, heading, list, document_title, signatures etc.
+        return await _translate_text_block(block, idx)
 
     # ── Translate Metadata (e-Stamp info) ──
     meta = state.get("metadata", {})
@@ -535,14 +560,14 @@ async def reconstruct_document(state: TranslationState) -> TranslationState:
             current_heading_original = block.get("content", "")
             current_heading_translated = block.get("translated_content", current_heading_original)
 
-        elif btype == "table":
-            # Represent table as text in the legacy sections format
-            original_table_text = _table_rows_to_text(block.get("table_rows", []))
-            translated_table_text = _translated_table_rows_to_text(
+        elif btype in ("table", "html_table", "kv_table"):
+            # Prefer the translated HTML string; fall back to a plain-text render
+            original_table_html = block.get("markdown_content", block.get("content")) or _table_rows_to_html(block.get("table_rows", []))
+            translated_html = block.get("translated_html_table") or block.get("translated_content") or _table_rows_to_html(
                 block.get("translated_table_rows", block.get("table_rows", []))
             )
-            current_section_original_lines.append(original_table_text)
-            current_section_translated_lines.append(translated_table_text)
+            current_section_original_lines.append(original_table_html)
+            current_section_translated_lines.append(translated_html)
 
         else:
             original = block.get("content", "")
@@ -618,8 +643,21 @@ def _split_text(text: str, max_chars: int) -> List[str]:
     return chunks or [text[:max_chars]]
 
 
+def _table_rows_to_html(rows: List) -> str:
+    """Convert table rows (dicts with 'text') to an HTML table string."""
+    if not rows:
+        return ""
+    html = ["<table style='border-collapse:collapse;width:100%'>"]
+    for i, row in enumerate(rows):
+        cells = [cell.get("text", "") if isinstance(cell, dict) else str(cell) for cell in row]
+        tag = "th" if i == 0 else "td"
+        html.append("<tr>" + "".join(f"<{tag} style='border:1px solid #ccc;padding:6px 10px'>{c}</{tag}>" for c in cells) + "</tr>")
+    html.append("</table>")
+    return "".join(html)
+
+
 def _table_rows_to_text(rows: List) -> str:
-    """Convert table rows (dicts with 'text') to plain-text table."""
+    """Convert table rows (dicts with 'text') to plain-text table (legacy fallback)."""
     lines = []
     for row in rows:
         cells = [cell.get("text", "") if isinstance(cell, dict) else str(cell) for cell in row]
@@ -628,7 +666,7 @@ def _table_rows_to_text(rows: List) -> str:
 
 
 def _translated_table_rows_to_text(rows: List) -> str:
-    """Convert translated table rows (dicts with 'translated_text') to plain-text table."""
+    """Convert translated table rows (dicts with 'translated_text') to plain-text (legacy fallback)."""
     lines = []
     for row in rows:
         cells = []

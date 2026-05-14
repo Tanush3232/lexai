@@ -1,177 +1,232 @@
-# LexAI — Deployment Guide (AWS Lightsail)
+# LexAI — Production Deployment Guide (AWS Lightsail)
+> **Last updated:** 2026-05-13  
+> **Branch:** `staging`  
+> **Deployed stack:** FastAPI · Celery · Next.js · Nginx · Postgres · Redis · Qdrant · Elasticsearch · Neo4j · MinIO
 
-This guide covers:
-1. Pushing your code to GitHub
-2. Setting up AWS Lightsail
-3. Deploying the full stack with Docker Compose
+---
+
+## What's in This Push (New vs Production)
+
+The following changes are **not yet in production** and will go live with this deployment.
+
+### 🆕 New Files (Untracked — must commit)
+| Path | What it is |
+|------|-----------|
+| `apps/api/alembic/versions/002_web_search.py` | DB migration: creates `web_search_sessions` + `web_search_citations` tables (with `turn_index`) |
+| `apps/api/app/ai/web_search_orchestrator.py` | Core AI orchestrator for legal web search (fast/pro/deep modes) |
+| `apps/api/app/api/v1/web_search.py` | API router: SSE streaming search, session CRUD |
+| `apps/api/app/api/v1/webhooks.py` | Microsoft Graph webhook handler for email ticketing |
+| `apps/api/app/models/message.py` | Message model (Legal Ticketing) |
+| `apps/api/app/models/ticket.py` | Ticket + TicketUser + EmailThread models |
+| `apps/api/app/models/web_search.py` | WebSearchSession + WebSearchCitation models |
+| `apps/api/app/services/graph_webhook_service.py` | MS Graph subscription management |
+| `apps/api/app/services/legal_email_service.py` | Outlook SMTP email sender |
+| `apps/api/app/services/message_service.py` | Ticket message CRUD |
+| `apps/api/app/services/ticket_ingestion_service.py` | Email→ticket ingestion logic |
+| `apps/api/app/services/ticket_notification_service.py` | Ticket email notifications |
+| `apps/api/app/services/ticket_service.py` | Ticket CRUD service |
+| `apps/api/app/tasks/webhook_tasks.py` | Celery tasks for webhook processing |
+| `apps/api/migrate.py` | One-off migration helper (superseded by alembic 002) |
+| `apps/web/app/dashboard/web-search/` | Full Web Search UI (list, new, session pages) |
+
+### 📝 Modified Files
+| Path | Key change |
+|------|-----------|
+| `apps/api/alembic/env.py` | Added `web_search` model import so alembic detects new tables |
+| `apps/api/app/ai/gemini_client.py` | Stability improvements |
+| `apps/api/app/ai/prompts.py` | Updated translation/OCR prompts |
+| `apps/api/app/ai/workflows/translation_workflow.py` | Translation pipeline stability |
+| `apps/api/app/api/v1/translations.py` | Translation API improvements |
+| `apps/api/app/celery_app.py` | ✅ Fixed: `worker_pool` changed from `solo` (Windows-only) → `prefork` (Linux production) |
+| `apps/api/app/core/config.py` | Added MS Graph, email, and webhook settings |
+| `apps/api/app/core/database.py` | Minor connection pool tuning |
+| `apps/api/app/main.py` | Registered `webhooks` + `web_search` routers |
+| `apps/api/app/models/__init__.py` | Added `ticket`, `message`, `web_search` model exports |
+| `apps/api/requirements.txt` | Added `aiosmtplib` (async SMTP) |
+| `apps/web/app/dashboard/layout.tsx` | Added Web Search nav item |
+| `apps/web/app/dashboard/translations/page.tsx` | Translation UI improvements |
+| `apps/web/app/globals.css` | UI style updates |
+| `apps/web/lib/api.ts` | Added web search + ticket API calls |
+
+### 🔧 Config Fixes Applied Before Push
+| File | Fix |
+|------|-----|
+| `nginx/nginx.conf` | Added `proxy_buffering off; proxy_cache off;` to `/api/` — **required for SSE streaming** |
+| `apps/api/app/celery_app.py` | Changed `worker_pool="solo"` → `worker_pool="prefork"` — **required on Linux** |
+| `apps/api/alembic/env.py` | Added `web_search` model import — **required for migrations to detect new tables** |
 
 ---
 
 ## Part 1 — Push to GitHub (Local Machine)
 
-Run these commands **on your Windows machine** from the project root:
+Run in PowerShell from the project root:
 
-```bash
-# Navigate to the project
+```powershell
 cd "C:\Users\tanush.angrish\Desktop\Tanush\LexAI"
 
-# Initialize git if you haven't already
-git init
-git remote add origin https://github.com/<your-username>/LexAI.git
-
-# Stage everything (secrets, logs, dev scripts are excluded by .gitignore)
+# Stage all new and modified files
 git add .
 
-# Review what's being committed (sanity check — .env should NOT appear)
+# Sanity check — .env must NOT appear in this list
 git status
 
 # Commit
-git commit -m "feat: production-ready LexAI deployment setup"
+git commit -m "feat: web search + legal ticketing + translation pipeline stability"
 
-# Push
-git push -u origin main
+# Push to staging branch (your remote branch)
+git push origin staging
 ```
 
-> ⚠️ **Before pushing**, confirm that `.env` is NOT shown in `git status`. If it appears, run `git rm --cached .env` first.
+> ⚠️ If `.env` appears in `git status`, run `git rm --cached .env` first.
 
 ---
 
-## Part 2 — Lightsail Instance Setup
+## Part 2 — Deploy on AWS Lightsail
 
-### 2a. SSH into your instance
-
-Download your Lightsail SSH key from the AWS console, then:
+### 2a. SSH into the instance
 
 ```bash
-# Windows (PowerShell) or Linux/Mac
 ssh -i ~/Downloads/LexAi.pem ubuntu@<YOUR_LIGHTSAIL_PUBLIC_IP>
 ```
 
-### 2b. Install Docker & Docker Compose
+### 2b. Pull the latest code
 
 ```bash
-# Update system
-sudo apt-get update && sudo apt-get upgrade -y
+cd ~/LexAI   # or wherever you cloned it
 
-# Install Docker
-curl -fsSL https://get.docker.com | sudo sh
-
-# Add ubuntu user to docker group (no sudo needed for docker commands)
-sudo usermod -aG docker ubuntu
-
-# Log out and back in (apply group change)
-exit
-# SSH back in
-ssh -i ~/Downloads/LexAi.pem ubuntu@<YOUR_LIGHTSAIL_PUBLIC_IP>
-
-# Verify Docker works
-docker --version
-docker compose version
+# Pull latest from staging
+git pull origin staging
 ```
 
-### 2c. Open Lightsail Firewall Ports
-
-In the **AWS Lightsail console** → Your Instance → **Networking** tab → **Add rule**:
-
-| Port | Protocol | Purpose |
-|------|----------|---------|
-| 80   | TCP      | Main app (Nginx) |
-| 9000 | TCP      | MinIO file downloads (presigned URLs) |
-
-> Port 22 (SSH) is already open by default.
-
----
-
-## Part 3 — Deploy the Application
-
-### 3a. Clone the repo
+### 2c. Verify `.env` is correct
 
 ```bash
-git clone https://github.com/<your-username>/LexAI.git
-cd LexAI
-```
-
-### 3b. Create `.env`
-
-```bash
-# Copy the template
-cp .env.example .env
-
-# Edit it with your values
+# Open and check these values are set correctly
 nano .env
 ```
 
-Fill in these **required** values in `.env`:
+Ensure these are filled in (not placeholder values):
 
-```
-SERVER_IP=<the public IP shown on your Lightsail dashboard>
+```ini
+SERVER_IP=<your Lightsail public IP>
 GOOGLE_API_KEY=<your Gemini API key>
-JWT_SECRET=<run: openssl rand -hex 32>
+JWT_SECRET=<long random hex — openssl rand -hex 32>
+POSTGRES_PASSWORD=<strong password>
+MINIO_ACCESS_KEY=<strong key>
+MINIO_SECRET_KEY=<strong secret>
 MINIO_PUBLIC_URL=http://<SERVER_IP>:9000
 NEXT_PUBLIC_API_URL=http://<SERVER_IP>
 CORS_ORIGINS=["http://<SERVER_IP>", "http://localhost:3000"]
+NEO4J_PASSWORD=<strong password>
+
+# Legal Ticketing (only if using email ingestion):
+EMAIL_USER=<outlook mailbox>
+EMAIL_PASS=<app password>
+GRAPH_TENANT_ID=<azure tenant id>
+GRAPH_CLIENT_ID=<azure app id>
+GRAPH_CLIENT_SECRET=<azure client secret>
+GRAPH_MAILBOX=<watched mailbox email>
+GRAPH_WEBHOOK_URL=http://<SERVER_IP>/api/v1/webhooks/graph
 ```
 
-Leave all other values as their defaults unless you want to change passwords.
-
-### 3c. Build and start everything
+### 2d. Rebuild and restart all services
 
 ```bash
-# Build all images and start in background
-# First run takes 10-15 minutes (downloads images, compiles Next.js)
+# Rebuild changed images (api, worker, web) and restart everything
 docker compose up -d --build
 
-# Watch the logs during startup
-docker compose logs -f --tail=50
+# Watch startup logs — wait until all services are healthy
+docker compose logs -f --tail=60
 ```
 
-### 3d. Wait for services to be healthy
+> ⏱️ First build after pulling code changes typically takes **3–8 minutes**.
+
+### 2e. Check all containers are healthy
 
 ```bash
-# Check container status
 docker compose ps
-
-# All services should show "healthy" or "running"
-# Elasticsearch takes the longest (~90 seconds)
 ```
 
-### 3e. Run database migrations
+Expected output (all should be `running` or `healthy`):
+
+```
+NAME                   STATUS
+lexai_postgres         healthy
+lexai_redis            healthy
+lexai_qdrant           running
+lexai_elasticsearch    healthy
+lexai_neo4j            running
+lexai_minio            healthy
+lexai_api              running
+lexai_worker           running
+lexai_web              running
+lexai_nginx            running
+```
+
+> 🕐 Elasticsearch takes up to 90 seconds to become healthy. Wait for it before proceeding.
+
+### 2f. Run database migrations
+
+**Run ONCE per deployment when there are schema changes.** This push adds the Web Search and Legal Ticketing tables.
 
 ```bash
-# Run alembic migrations (only needed on first deploy or after schema changes)
+# This runs all pending alembic migrations in order:
+#   001_legal_ticketing  → tickets, ticket_users, email_threads, email_logs, messages
+#   002_web_search       → web_search_sessions, web_search_citations (with turn_index)
 docker compose exec api alembic upgrade head
 ```
 
-### 3f. Verify the app is running
+Expected output:
+```
+INFO  [alembic.runtime.migration] Running upgrade  -> 001_legal_ticketing, add_legal_ticketing_system
+INFO  [alembic.runtime.migration] Running upgrade 001_legal_ticketing -> 002_web_search, add_web_search_feature
+```
 
-Open your browser:
+> ⚠️ If the database already has these tables (from a previous manual migration), alembic will detect them as already applied and skip safely.
+
+### 2g. Verify the deployment
+
+Open in your browser:
 - **App**: `http://<YOUR_LIGHTSAIL_PUBLIC_IP>/`
-- **API docs**: `http://<YOUR_LIGHTSAIL_PUBLIC_IP>/docs`
+- **API health**: `http://<YOUR_LIGHTSAIL_PUBLIC_IP>/api/health`
+- **API docs**: `http://<YOUR_LIGHTSAIL_PUBLIC_IP>/api/docs`
+
+Test the web search endpoint:
+```bash
+curl http://<SERVER_IP>/api/health
+# Expected: {"status":"ok","service":"lexai-api"}
+```
 
 ---
 
-## Part 4 — Updating the App (Re-deploy)
+## Part 3 — Open Firewall Ports (First Time Only)
 
-When you push new code and want to update Lightsail:
+In **AWS Lightsail Console → Your Instance → Networking → Add rule**:
+
+| Port | Protocol | Purpose |
+|------|----------|---------|
+| 80   | TCP      | Main app (Nginx — frontend + API) |
+| 9000 | TCP      | MinIO file downloads (presigned PDF URLs) |
+| 22   | TCP      | SSH (already open by default) |
+
+---
+
+## Part 4 — Future Re-Deployments
 
 ```bash
-# On your local machine — push changes
+# LOCAL: commit and push changes
 git add .
 git commit -m "your change description"
-git push origin main
+git push origin staging
 
-# SSH into Lightsail
-ssh -i ~/Downloads/LexAi.pem ubuntu@<YOUR_LIGHTSAIL_PUBLIC_IP>
-cd LexAI
-
-# Pull latest code
-git pull origin main
-
-# Rebuild only changed services and restart
+# LIGHTSAIL: pull and rebuild
+ssh -i ~/Downloads/LexAi.pem ubuntu@<SERVER_IP>
+cd ~/LexAI
+git pull origin staging
 docker compose up -d --build
 
-# View logs
-docker compose logs -f api web
+# Only run migrations if schema changed:
+docker compose exec api alembic upgrade head
 ```
 
 ---
@@ -179,44 +234,59 @@ docker compose logs -f api web
 ## Part 5 — Useful Commands on Lightsail
 
 ```bash
-# View all container statuses
+# ── Container status ──────────────────────────────────────────────────────────
 docker compose ps
+docker stats --no-stream
 
-# View logs for a specific service
-docker compose logs -f api
-docker compose logs -f worker
-docker compose logs -f web
+# ── Logs ──────────────────────────────────────────────────────────────────────
+docker compose logs -f api          # API logs
+docker compose logs -f worker       # Celery worker logs
+docker compose logs -f web          # Next.js logs
+docker compose logs -f nginx        # Nginx access/error logs
 
-# Restart a single service without rebuilding
+# ── Restart a single service (no rebuild) ─────────────────────────────────────
 docker compose restart api
+docker compose restart worker
+docker compose restart nginx
 
-# Stop everything
-docker compose down
+# ── Migrations ────────────────────────────────────────────────────────────────
+docker compose exec api alembic upgrade head       # apply all pending migrations
+docker compose exec api alembic current            # show current revision
+docker compose exec api alembic history            # show migration history
 
-# Stop and delete all data volumes (⚠️ destroys the database!)
-docker compose down -v
+# ── Database access ───────────────────────────────────────────────────────────
+docker compose exec postgres psql -U lexai -d lexai
 
-# Check memory usage (important on 2 GB instance)
+# ── Memory check (critical on 2 GB Lightsail) ────────────────────────────────
 free -h
 docker stats --no-stream
 
-# Run a command inside a container
-docker compose exec api bash
-docker compose exec api alembic upgrade head
+# ── Clean up Docker build cache (free disk space) ────────────────────────────
+docker system prune -f
+docker builder prune -f
+
+# ── Full stop ─────────────────────────────────────────────────────────────────
+docker compose down
+
+# ── DANGER: wipes all data volumes ───────────────────────────────────────────
+docker compose down -v
 ```
 
 ---
 
 ## Troubleshooting
 
-| Problem | Solution |
-|---------|----------|
-| App not loading | Check nginx: `docker compose logs nginx` |
-| API errors | Check: `docker compose logs api` |
-| Out of memory | Check: `free -h`, restart Elasticsearch: `docker compose restart elasticsearch` |
-| Build fails | Check disk: `df -h`, prune: `docker system prune -f` |
-| Elasticsearch red | Wait 2 minutes, then: `docker compose restart elasticsearch` |
-| MinIO files not loading | Ensure port 9000 is open in Lightsail firewall |
+| Symptom | Fix |
+|---------|-----|
+| App not loading | `docker compose logs nginx` — check for upstream errors |
+| API 502/503 | `docker compose logs api` — check if api container crashed |
+| Web search SSE hangs | Check `nginx/nginx.conf` has `proxy_buffering off` in `/api/` block |
+| Celery worker not processing | `docker compose logs worker` — check Redis connectivity |
+| Elasticsearch red status | `docker compose restart elasticsearch` — wait 90s |
+| MinIO PDFs not loading | Ensure port 9000 open in Lightsail firewall; check `MINIO_PUBLIC_URL` in `.env` |
+| Migration already applied error | `docker compose exec api alembic current` — alembic tracks applied versions |
+| OOM crash | `free -h` + `docker stats`. Restart elasticsearch first: `docker compose restart elasticsearch` |
+| Build fails (disk full) | `docker system prune -f` then `docker compose up -d --build` |
 
 ---
 
@@ -225,12 +295,15 @@ docker compose exec api alembic upgrade head
 ```
 Browser
   │
-  └─ :80 → Nginx ─┬─ / ──────► web (Next.js :3000)
-                  └─ /api/ ──► api (FastAPI :8000)
+  └─ :80 → Nginx ─┬─ /       → web:3000   (Next.js frontend)
+                   ├─ /api/   → api:8000   (FastAPI backend)
+                   │              └─ /api/v1/web-search/search → SSE stream (proxy_buffering off)
+                   └─ /api/docs → api:8000/api/docs (Swagger)
 
 Browser
-  └─ :9000 → MinIO (direct, for presigned file downloads)
+  └─ :9000 → MinIO (direct, presigned PDF downloads)
 
-Internal (Docker network only):
-  api / worker → postgres, redis, qdrant, elasticsearch, neo4j, minio
+Internal Docker network only:
+  api + worker → postgres:5432, redis:6379, qdrant:6333,
+                 elasticsearch:9200, neo4j:7687, minio:9000
 ```

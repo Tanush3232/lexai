@@ -226,7 +226,7 @@ async def extract_text_from_file(file_bytes: bytes, mime_type: str) -> str:
             usage = response.usage_metadata
             input_tokens = getattr(usage, "prompt_token_count", 0) or 0
             output_tokens = getattr(usage, "candidates_token_count", 0) or 0
-            model_name = normalise_model_name(getattr(response, "model_version", "") or "gemini-2.5-flash")
+            model_name = normalise_model_name(getattr(response, "model_version", "") or "gemini-2.5-pro")
             await log_usage(model_name, "doc_text_extraction", input_tokens, output_tokens)
         except Exception:
             pass  # never break extraction for tracking

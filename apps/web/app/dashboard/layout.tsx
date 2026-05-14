@@ -60,6 +60,17 @@ const NAV_ITEMS = [
       </svg>
     )
   },
+  {
+    href: "/dashboard/web-search",
+    label: "Web Search",
+    disabled: false,
+    roles: ["legal_team", "reviewer", "ops_admin", "super_admin"],
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+      </svg>
+    )
+  },
   { 
     href: "/dashboard/translations", 
     label: "Translations", 

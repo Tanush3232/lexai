@@ -1651,3 +1651,56 @@ body {
 }
 .empty-state svg { width: 32px; height: 32px; margin: 0 auto 10px; display: block; opacity: .4; }
 
+/* ─── HTML TABLE RENDERER (Translation page) ─── */
+/* Scoped to .html-table-section so global table styles are not affected. */
+.html-table-section table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+  margin: 4px 0;
+  overflow-x: auto;
+  display: block;
+}
+.html-table-section th,
+.html-table-section td {
+  border: 1px solid var(--border2);
+  padding: 7px 10px;
+  text-align: left;
+  vertical-align: top;
+  line-height: 1.5;
+  word-break: break-word;
+}
+.html-table-section th {
+  background: var(--bg2);
+  font-weight: 700;
+  color: var(--text);
+}
+.html-table-section tr:nth-child(even) td {
+  background: var(--bg);
+}
+
+/* Metadata Key-Value Tables */
+.html-table-section table.kv-table {
+  border: none !important;
+  display: table !important; /* Force table layout for KV pairs */
+  width: auto !important;
+  min-width: 300px;
+}
+.html-table-section table.kv-table td {
+  border: none !important;
+  padding: 4px 12px 4px 0 !important;
+}
+.html-table-section table.kv-table td:first-child {
+  font-weight: 700;
+  color: var(--text2);
+  width: 180px;
+  white-space: nowrap;
+}
+.html-table-section table.kv-table td:last-child {
+  color: var(--text);
+}
+.html-table-section tr:hover td {
+  background: var(--accent-light);
+}
+
+

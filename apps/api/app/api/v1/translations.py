@@ -367,8 +367,54 @@ def _iter_blocks(translated_blocks, sections, fallback_text):
     otherwise synthesises pseudo-blocks from sections or fallback_text.
     Each yielded item is a dict with at minimum {"type", "translated_content"}.
     """
+    import re as _re_ib
+
     if translated_blocks:
-        yield from translated_blocks
+        for b in translated_blocks:
+            btype = b.get("type", "paragraph")
+            txt = b.get("translated_content") or b.get("content") or ""
+            
+            # If a text block contains a <table> OR a Markdown pipe table, split it out
+            has_html_table = "<table" in txt.lower()
+            has_pipe_table = "|" in txt and "--|" in txt
+            
+            if btype not in ("table", "html_table", "kv_table") and (has_html_table or has_pipe_table):
+                # Regex to find either <table>...</table> OR lines that look like a pipe table
+                # For pipe tables, we look for blocks of lines containing '|'
+                import re as _re_ib_local
+                
+                # First handle HTML tables
+                if has_html_table:
+                    parts = _re_ib_local.split(r"(<table[\s\S]*?</table>)", txt, flags=_re_ib_local.I)
+                else:
+                    # Very basic split for pipe tables: look for double newlines
+                    parts = txt.split("\n\n")
+
+                for part in parts:
+                    part = part.strip()
+                    if not part: continue
+                    
+                    if has_html_table and _re_ib_local.match(r"<table", part, _re_ib_local.I):
+                        yield {"type": "html_table", "translated_content": part, 
+                               "translated_table_rows": [], "table_rows": []}
+                    elif "|" in part and "--|" in part:
+                        # Convert pipe table to row data immediately for the builder
+                        rows = []
+                        for line in part.split("\n"):
+                            if "--|" in line: continue
+                            cells = [c.strip() for c in line.split("|") if c.strip() or "|" in line]
+                            # Filter out empty first/last cells from | cell | cell | format
+                            if line.startswith("|"): cells = cells[1:]
+                            if line.endswith("|"): cells = cells[:-1]
+                            if cells: rows.append(cells)
+                        
+                        yield {"type": "table", "translated_table_rows": rows, "table_rows": rows}
+                    else:
+                        nb = b.copy()
+                        nb["translated_content"] = part
+                        yield nb
+            else:
+                yield b
         return
 
     if sections:
@@ -379,7 +425,18 @@ def _iter_blocks(translated_blocks, sections, fallback_text):
                 yield {"type": "heading", "heading_level": 2,
                        "translated_content": hd, "style": {"bold": True}}
             if tx:
-                yield {"type": "paragraph", "translated_content": tx, "style": {}}
+                # Split on HTML table boundaries so tables get proper block treatment
+                parts = _re_ib.split(r"(<table[\s\S]*?</table>)", tx, flags=_re_ib.I)
+                for part in parts:
+                    part = part.strip()
+                    if not part:
+                        continue
+                    if _re_ib.match(r"<table", part, _re_ib.I):
+                        # Yield as a table block so PDF/DOCX builders render it correctly
+                        yield {"type": "html_table", "translated_content": part,
+                               "translated_table_rows": [], "table_rows": []}
+                    else:
+                        yield {"type": "paragraph", "translated_content": part, "style": {}}
         return
 
     # last resort
@@ -387,6 +444,56 @@ def _iter_blocks(translated_blocks, sections, fallback_text):
         para = para.strip()
         if para:
             yield {"type": "paragraph", "translated_content": para, "style": {}}
+
+
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Unicode Font Registration (needed for non-Latin scripts like Devanagari)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _get_unicode_fonts() -> tuple:
+    """
+    Attempt to register a Unicode TrueType font that can render Devanagari, 
+    Arabic, CJK and other non-Latin scripts in ReportLab PDFs.
+    Returns (regular_font_name, bold_font_name) — falls back to Helvetica if unavailable.
+    """
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    import os
+
+    CANDIDATES = [
+        # Windows — Arial has broad Unicode coverage including Devanagari
+        ("C:/Windows/Fonts/arial.ttf",   "C:/Windows/Fonts/arialbd.ttf"),
+        # Windows — Noto (if user has installed it)
+        ("C:/Windows/Fonts/NotoSans-Regular.ttf", "C:/Windows/Fonts/NotoSans-Bold.ttf"),
+        # Linux / Docker — Noto Sans (most distros)
+        ("/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+         "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf"),
+        # Linux — Liberation Sans (common fallback)
+        ("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"),
+        # Linux — DejaVu Sans
+        ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+        # Linux — FreeSans
+        ("/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+         "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf"),
+    ]
+
+    for reg_path, bold_path in CANDIDATES:
+        if os.path.exists(reg_path):
+            try:
+                pdfmetrics.registerFont(TTFont("LexUnicode", reg_path))
+                if os.path.exists(bold_path):
+                    pdfmetrics.registerFont(TTFont("LexUnicode-Bold", bold_path))
+                    return "LexUnicode", "LexUnicode-Bold"
+                return "LexUnicode", "LexUnicode"
+            except Exception:
+                continue
+
+    # Nothing found — fall back to Helvetica (Latin-only, may show boxes for Hindi)
+    return "Helvetica", "Helvetica-Bold"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -431,30 +538,33 @@ def _build_pdf(
     TBDR  = HexColor("#B8CFE6")
     RULE  = HexColor("#C8D8E8")
 
+    # ── Use a Unicode-capable font so Devanagari/non-Latin chars render correctly ──
+    BASE_FONT, BASE_FONT_BOLD = _get_unicode_fonts()
+
     hs = {
-        1: ParagraphStyle("h1", parent=ss["Normal"], fontName="Helvetica-Bold",
+        1: ParagraphStyle("h1", parent=ss["Normal"], fontName=BASE_FONT_BOLD,
                           fontSize=15, leading=20, spaceAfter=8, spaceBefore=14, textColor=NAVY),
-        2: ParagraphStyle("h2", parent=ss["Normal"], fontName="Helvetica-Bold",
+        2: ParagraphStyle("h2", parent=ss["Normal"], fontName=BASE_FONT_BOLD,
                           fontSize=13, leading=18, spaceAfter=6, spaceBefore=10, textColor=BLUE2),
-        3: ParagraphStyle("h3", parent=ss["Normal"], fontName="Helvetica-Bold",
+        3: ParagraphStyle("h3", parent=ss["Normal"], fontName=BASE_FONT_BOLD,
                           fontSize=11.5, leading=16, spaceAfter=4, spaceBefore=8, textColor=BLUE2),
-        4: ParagraphStyle("h4", parent=ss["Normal"], fontName="Helvetica-Bold",
+        4: ParagraphStyle("h4", parent=ss["Normal"], fontName=BASE_FONT_BOLD,
                           fontSize=10.5, leading=14, spaceAfter=3, spaceBefore=6, textColor=BLUE3),
-        5: ParagraphStyle("h5", parent=ss["Normal"], fontName="Helvetica-BoldOblique",
+        5: ParagraphStyle("h5", parent=ss["Normal"], fontName=BASE_FONT_BOLD,
                           fontSize=10, leading=13, spaceAfter=3, spaceBefore=5, textColor=BLUE3),
-        6: ParagraphStyle("h6", parent=ss["Normal"], fontName="Helvetica-Oblique",
+        6: ParagraphStyle("h6", parent=ss["Normal"], fontName=BASE_FONT,
                           fontSize=10, leading=13, spaceAfter=2, spaceBefore=4, textColor=GREY),
     }
-    body   = ParagraphStyle("body", parent=ss["Normal"], fontName="Helvetica",
+    body   = ParagraphStyle("body", parent=ss["Normal"], fontName=BASE_FONT,
                              fontSize=10, leading=15, spaceAfter=5, spaceBefore=2,
                              alignment=TA_JUSTIFY, wordWrap="CJK")
-    b_bold = ParagraphStyle("bb", parent=body, fontName="Helvetica-Bold")
-    b_ital = ParagraphStyle("bi", parent=body, fontName="Helvetica-Oblique")
-    lst_s  = ParagraphStyle("ls", parent=ss["Normal"], fontName="Helvetica",
+    b_bold = ParagraphStyle("bb", parent=body, fontName=BASE_FONT_BOLD)
+    b_ital = ParagraphStyle("bi", parent=body, fontName=BASE_FONT)
+    lst_s  = ParagraphStyle("ls", parent=ss["Normal"], fontName=BASE_FONT,
                              fontSize=10, leading=14, spaceAfter=3, leftIndent=16)
-    meta_s  = ParagraphStyle("mt", parent=ss["Normal"], fontName="Helvetica-Oblique",
+    meta_s  = ParagraphStyle("mt", parent=ss["Normal"], fontName=BASE_FONT,
                              fontSize=8.5, leading=12, textColor=GREY)
-    label_s = ParagraphStyle("lb", parent=body, fontName="Helvetica-Bold", fontSize=9)
+    label_s = ParagraphStyle("lb", parent=body, fontName=BASE_FONT_BOLD, fontSize=9)
 
     # ── Metadata Table (Phase 1/2 requirement) ──
     if metadata:
@@ -534,26 +644,44 @@ def _build_pdf(
             story.append(PageBreak())
             continue
 
+        # ── Table blocks ──────────────────────────────────────────────────────
+        if btype in ("table", "html_table", "kv_table"):
+            # PRIORITY: Use translated HTML first (contains correctly translated English text).
+            # translated_table_rows is a backup that may still contain original-language text,
+            # so we only fall back to it if no HTML is available.
+            html_tbl = (
+                block.get("translated_html_table")
+                or block.get("translated_content", "")
+            )
+            
+            if html_tbl and "<table" in html_tbl.lower():
+                # Parse the HTML into rows for ReportLab
+                import re as _re2
+                strip_tags = lambda s: _re2.sub(r'<[^>]+>', '', s).strip()
+                rows_html: list = []
+                for tr in _re2.findall(r'<tr[^>]*>(.*?)</tr>', html_tbl, _re2.I | _re2.S):
+                    cells_raw = _re2.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', tr, _re2.I | _re2.S)
+                    cells_clean = [strip_tags(c) for c in cells_raw]
+                    if cells_clean:
+                        rows_html.append(cells_clean)
+                if rows_html:
+                    _draw_table(rows_html)
+                    story.append(Spacer(1, 4))
+                    continue
+
+            # Fallback: use structured translated_table_rows
+            rows = block.get("translated_table_rows") or block.get("table_rows", [])
+            if rows:
+                _draw_table(rows)
+            story.append(Spacer(1, 4))
+            continue
+
         txt = block.get("translated_content", block.get("content", ""))
         if not txt.strip():
             continue
 
         # Convert Markdown to ReportLab-friendly XML
         clean_txt = _xml_escape(txt)
-
-        if btype == "table" or ("|" in clean_txt and "---" in clean_txt):
-            # Try to render as table if markdown table is detected
-            if "|" in clean_txt and "---" in clean_txt:
-                lines = [l for l in clean_txt.split("<br/>") if "|" in l]
-                rows = []
-                for l in lines:
-                    if "---" in l: continue
-                    # Split cells and filter out empty residuals from the pipe regex
-                    cells = [c.strip() for c in l.split("|") if c.strip() or l.startswith("|") or l.endswith("|")]
-                    if cells: rows.append(cells)
-                if rows:
-                    _draw_table(rows)
-                    continue
 
         if btype == "signatures":
             story.append(Spacer(1, 10))
@@ -564,6 +692,7 @@ def _build_pdf(
         # Normal paragraph (contains headers and bold numbering in markdown tags now)
         story.append(Paragraph(clean_txt, body))
         story.append(Spacer(1, 4))
+
 
     doc.build(story)
     return buf.getvalue()
@@ -732,10 +861,29 @@ def _build_docx(
                 _add_heading(clean_txt, lvl)
             continue
 
-        if btype == "table":
+        if btype in ("table", "html_table", "kv_table"):
+            # PRIORITY: prefer translated HTML (English) over translated_table_rows (may be original lang)
+            import re as _re2
+            strip_tags = lambda s: _re2.sub(r'<[^>]+>', '', s).strip()
+            
+            html_tbl = block.get("translated_html_table") or block.get("translated_content", "")
+            if html_tbl and "<table" in html_tbl.lower():
+                rows_html = []
+                for tr in _re2.findall(r'<tr[^>]*>(.*?)</tr>', html_tbl, _re2.I | _re2.S):
+                    cells_raw = _re2.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', tr, _re2.I | _re2.S)
+                    cells_clean = [strip_tags(c) for c in cells_raw]
+                    if cells_clean:
+                        rows_html.append(cells_clean)
+                if rows_html:
+                    _add_table(rows_html)
+                    continue
+
+            # Fallback: structured row data
             rows = block.get("translated_table_rows") or block.get("table_rows", [])
-            _add_table(rows)
+            if rows:
+                _add_table(rows)
             continue
+
 
         if btype == "list":
             items = block.get("list_items", [])
@@ -856,8 +1004,16 @@ def _build_text(
                 lines.append("")
             continue
 
-        if btype == "table":
+        if btype in ("table", "html_table", "kv_table"):
             rows = block.get("translated_table_rows") or block.get("table_rows", [])
+            if not rows:
+                html_tbl = block.get("translated_html_table") or block.get("translated_content", "")
+                if html_tbl:
+                    import re as _re2
+                    cell_texts = _re2.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", html_tbl, _re2.I | _re2.S)
+                    col_count = len(_re2.findall(r"<t[dh]", html_tbl.split("</tr>")[0], _re2.I)) if "</tr>" in html_tbl else 1
+                    if cell_texts and col_count:
+                        rows = [[c.strip() for c in r] for r in [cell_texts[i:i+col_count] for i in range(0, len(cell_texts), col_count)]]
             txt = _table_to_text(rows)
             if txt:
                 lines.append("")

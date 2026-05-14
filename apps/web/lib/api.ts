@@ -186,3 +186,138 @@ export const usersApi = {
   update: (id: string, data: any) => api.put(`/users/${id}`, data),
   delete: (id: string) => api.delete(`/users/${id}`),
 };
+
+// Web Search
+export type SearchMode = "fast" | "pro" | "deep";
+
+export interface SearchEvent {
+  type: "session_created" | "thinking_step" | "complete" | "error";
+  session_id?: string;
+  step?: string;
+  detail?: string;
+  timestamp?: string;
+  answer?: string;
+  citations?: Citation[];
+  reasoning_steps?: ReasoningStep[];
+  search_plan?: Record<string, unknown>;
+  message?: string;
+  read_but_not_used?: Citation[];
+}
+
+export interface Citation {
+  id: string;
+  source_name: string;
+  url: string;
+  snippet?: string;
+  domain: string;
+  relevance_score?: number;
+  jurisdiction?: string;
+  citation_type?: string;
+  turn_index?: number;
+}
+
+export interface ReasoningStep {
+  step: string;
+  detail?: string;
+  timestamp?: string;
+}
+
+export interface SearchSession {
+  id: string;
+  query: string;
+  mode: string;
+  status: string;
+  answer_summary?: string;
+  full_answer?: string;
+  reasoning_steps?: ReasoningStep[];
+  search_plan?: Record<string, unknown>;
+  citations?: Citation[];
+  error_message?: string;
+  created_at: string;
+}
+
+export const webSearchApi = {
+  generatePlan: (query: string) => api.post("/web-search/plan", { query, mode: "deep" }),
+  
+  /**
+   * Start a legal web search and consume the SSE stream.
+   * Returns a cleanup function to abort the fetch.
+   */
+  startSearch: (
+    query: string,
+    mode: SearchMode,
+    plan: string[] | undefined,
+    sessionId: string | undefined,
+    onEvent: (event: SearchEvent) => void,
+    onError?: (err: Error) => void,
+    onDone?: () => void
+  ): (() => void) => {
+    const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+    const baseUrl = base.startsWith("/") ? `${base}/v1` : `${base}/api/v1`;
+    const authToken = useAuthStore.getState().token || "";
+
+    const controller = new AbortController();
+
+    (async () => {
+      try {
+        const bodyData: any = { query, mode };
+        if (plan && plan.length > 0) bodyData.plan = plan;
+        if (sessionId) bodyData.session_id = sessionId;
+
+        const response = await fetch(`${baseUrl}/web-search/search`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify(bodyData),
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          throw new Error(`Search request failed: ${response.status}`);
+        }
+
+        const reader = response.body?.getReader();
+        if (!reader) throw new Error("No response body");
+
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              try {
+                const event: SearchEvent = JSON.parse(line.slice(6));
+                onEvent(event);
+              } catch {
+                // malformed chunk — skip
+              }
+            }
+          }
+        }
+        onDone?.();
+      } catch (err: any) {
+        if (err.name !== "AbortError") {
+          onError?.(err instanceof Error ? err : new Error(String(err)));
+        }
+      }
+    })();
+
+    return () => controller.abort();
+  },
+
+  listSessions: (page = 1, limit = 20) =>
+    api.get("/web-search/sessions", { params: { page, limit } }),
+
+  getSession: (sessionId: string) =>
+    api.get<SearchSession>(`/web-search/sessions/${sessionId}`),
+
+  deleteSession: (sessionId: string) =>
+    api.delete(`/web-search/sessions/${sessionId}`),
+};
