@@ -27,6 +27,7 @@ from app.api.v1 import (
     users,
     webhooks,          # ← Legal Ticketing — Graph webhook
     web_search,        # ← Web Search Feature
+    tickets,
 )
 
 
@@ -104,6 +105,7 @@ app.include_router(audit.router, prefix="/api/v1/audit", tags=["audit"])
 app.include_router(usage.router, prefix="/api/v1/usage", tags=["usage"])
 app.include_router(acts.router, prefix="/api/v1/acts", tags=["acts"])
 app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
+app.include_router(tickets.router, prefix="/api/v1/tickets", tags=["tickets"])
 # Legal Ticketing — Graph webhook (no auth — Microsoft calls this directly)
 app.include_router(webhooks.router, prefix="/api/v1/webhooks/graph", tags=["webhooks"])
 # Web Search Feature
