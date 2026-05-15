@@ -95,6 +95,8 @@ class Settings(BaseSettings):
     GRAPH_WEBHOOK_URL: str = ""      # e.g. https://api.yourdomain.com/api/v1/webhooks/graph
     # Shared secret Microsoft sends in every notification for authenticity check
     GRAPH_WEBHOOK_SECRET: str = "lexai-webhook-secret"
+    # If True, uses the EMAIL_USER and EMAIL_PASS to get a Delegated token (avoids Admin Consent)
+    GRAPH_USE_DELEGATED_AUTH: bool = True
 
 
 settings = Settings()

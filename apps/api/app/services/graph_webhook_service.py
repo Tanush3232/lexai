@@ -56,12 +56,25 @@ async def _get_access_token() -> str:
         )
 
     url = f"{_AUTHORITY}/{tenant_id}/oauth2/v2.0/token"
-    payload = {
-        "client_id": settings.GRAPH_CLIENT_ID,
-        "client_secret": settings.GRAPH_CLIENT_SECRET,
-        "scope": "https://graph.microsoft.com/.default",
-        "grant_type": "client_credentials",
-    }
+    
+    if settings.GRAPH_USE_DELEGATED_AUTH:
+        if not settings.EMAIL_USER or not settings.EMAIL_PASS:
+            raise RuntimeError("EMAIL_USER and EMAIL_PASS must be set for Delegated Auth.")
+        payload = {
+            "client_id": settings.GRAPH_CLIENT_ID,
+            "client_secret": settings.GRAPH_CLIENT_SECRET,
+            "scope": "https://graph.microsoft.com/Mail.Read",
+            "grant_type": "password",
+            "username": settings.EMAIL_USER,
+            "password": settings.EMAIL_PASS,
+        }
+    else:
+        payload = {
+            "client_id": settings.GRAPH_CLIENT_ID,
+            "client_secret": settings.GRAPH_CLIENT_SECRET,
+            "scope": "https://graph.microsoft.com/.default",
+            "grant_type": "client_credentials",
+        }
 
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.post(url, data=payload)
