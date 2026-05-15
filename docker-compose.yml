@@ -170,6 +170,19 @@ services:
       minio:
         condition: service_healthy
 
+  beat:
+    build:
+      context: .
+      dockerfile: apps/workers/Dockerfile
+    container_name: lexai_beat
+    restart: unless-stopped
+    # Override the default worker command to run the beat scheduler instead
+    command: celery -A app.celery_app beat --loglevel=info
+    <<: *api-env
+    depends_on:
+      redis:
+        condition: service_healthy
+
   web:
     build:
       context: ./apps/web
