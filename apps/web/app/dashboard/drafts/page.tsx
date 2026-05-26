@@ -1416,6 +1416,7 @@ const STYLES = `
   .btn-info:hover { background: var(--bg); color: var(--text1); border-color: var(--accent); }
 
   .btn-new-draft { display: flex; align-items: center; gap: 8px; padding: 11px 22px; background: linear-gradient(135deg, var(--accent), #7c5cfc); color: #fff; border: none; border-radius: 12px; font-weight: 700; font-size: 14px; cursor: pointer; box-shadow: 0 4px 20px rgba(124,92,252,0.4); transition: all 0.2s; }
+  .empty-state .btn-new-draft { margin: 0 auto; }
   .btn-new-draft:hover { transform: translateY(-2px); box-shadow: 0 6px 28px rgba(124,92,252,0.5); }
 
   .draft-search { position: relative; max-width: 420px; }
@@ -1526,7 +1527,7 @@ const STYLES = `
   .error-card p { margin: 0; font-size: 13px; color: var(--text2); }
 
   /* ── Sources view ── */
-  .sources-view { max-width: 1100px; margin: 0 auto; }
+  .sources-view { max-width: 1100px; margin: 0 auto; display: flex; flex-direction: column; min-height: calc(100vh - 80px); }
   .sources-header { display: flex; align-items: flex-start; gap: 20px; margin-bottom: 20px; flex-wrap: wrap; }
   .sources-title { font-size: 22px; font-weight: 800; margin: 0 0 4px; }
   .sources-sub { color: var(--text3); font-size: 13px; margin: 0; }
@@ -1540,7 +1541,7 @@ const STYLES = `
   .source-filter-btn.active, .source-filter-btn:hover { background: var(--accent-light); border-color: var(--accent); color: var(--accent); }
   .selected-count { margin-left: auto; font-size: 12px; color: var(--text3); font-weight: 600; }
 
-  .sources-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; margin-bottom: 100px; }
+  .sources-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; padding-bottom: 40px; margin-bottom: auto; }
   .source-card { background: var(--white); border: 1px solid var(--border); border-radius: 12px; padding: 18px; cursor: pointer; transition: all 0.2s; position: relative; }
   .source-card:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 4px 16px rgba(0,0,0,0.08); }
   .source-card.selected { border-color: var(--accent); background: var(--accent-light); }
@@ -1560,7 +1561,7 @@ const STYLES = `
   .source-link:hover { color: var(--accent); }
   .source-reason { font-size: 11px; color: var(--text3); margin: 8px 0 0; font-style: italic; }
 
-  .sources-footer { position: fixed; bottom: 0; left: 0; right: 0; background: var(--bg2); border-top: 1px solid var(--border); padding: 16px 32px; display: flex; justify-content: space-between; align-items: center; z-index: 100; backdrop-filter: blur(12px); }
+  .sources-footer { position: sticky; bottom: 0; background: rgba(255, 255, 255, 0.9); border-top: 1px solid var(--border); border-radius: 16px 16px 0 0; padding: 16px 32px; display: flex; justify-content: space-between; align-items: center; z-index: 100; backdrop-filter: blur(12px); box-shadow: 0 -4px 20px rgba(0,0,0,0.05); margin-top: 20px; }
   .footer-note { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text2); }
   .text-green { color: #10b981; }
 
@@ -1689,8 +1690,8 @@ const STYLES = `
   .btn-insert-fix:not(:disabled):hover { transform: translateY(-1px); box-shadow: 0 3px 10px rgba(16,185,129,0.35); }
 
   /* Info Modal Styles */
-  .modal-backdrop { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.4); backdrop-filter: blur(4px); display: flex; justify-content: center; align-items: center; z-index: 1000; padding: 20px; }
-  .info-modal-content { background: var(--white); border-radius: 16px; width: 100%; max-width: 560px; max-height: 90vh; overflow-y: auto; padding: 32px; position: relative; box-shadow: var(--shadow-lg); }
+  .modal-backdrop { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.4); backdrop-filter: blur(4px); display: flex; justify-content: center; align-items: center; z-index: 9999; padding: 20px; box-sizing: border-box; }
+  .info-modal-content { background: var(--white); border-radius: 16px; width: 100%; max-width: 560px; max-height: 90vh; overflow-y: auto; padding: 32px; position: relative; box-shadow: var(--shadow-lg); box-sizing: border-box; margin: 0 auto; }
   .btn-close-modal { position: absolute; top: 20px; right: 20px; background: none; border: none; color: var(--text3); cursor: pointer; padding: 4px; border-radius: 6px; transition: all 0.2s; }
   .btn-close-modal:hover { background: var(--bg2); color: var(--text1); }
   
