@@ -57,8 +57,11 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 480
 
-    # Gemini
+    # Gemini (used everywhere except contract drafting)
     GOOGLE_API_KEY: str = ""
+
+    # Anthropic / Claude (used exclusively for contract drafting)
+    ANTHROPIC_API_KEY: str = ""
 
     # Celery
     CELERY_BROKER_URL: str = "redis://localhost:6379/1"

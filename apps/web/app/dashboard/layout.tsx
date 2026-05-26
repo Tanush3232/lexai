@@ -52,7 +52,7 @@ const NAV_ITEMS = [
   { 
     href: "/dashboard/drafts", 
     label: "Contract Drafting", 
-    disabled: true,
+    disabled: false,
     roles: ["legal_team", "reviewer", "ops_admin", "super_admin"],
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

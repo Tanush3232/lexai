@@ -110,16 +110,276 @@ export const chatApi = {
   improvePrompt: (content: string) => api.post("/chat/improve", { content }),
 };
 
-// Drafts
+// Drafts — Legacy (still used for viewing existing drafts)
 export const draftsApi = {
-  create: (data: { contract_type: string; title: string; inputs: Record<string, unknown> }) =>
-    api.post("/drafts/", data),
+  create: (data: { contract_type: string; title?: string; inputs: any }) => api.post("/drafts/", data),
   list: () => api.get("/drafts/"),
   get: (id: string) => api.get(`/drafts/${id}`),
-  update: (id: string, data: { content?: string; title?: string }) =>
-    api.patch(`/drafts/${id}`, data),
+  update: (id: string, data: any) => api.patch(`/drafts/${id}`, data),
+  delete: (id: string) => api.delete(`/drafts/${id}`),
   approve: (id: string) => api.post(`/drafts/${id}/approve`),
+  exportDocx: (id: string) =>
+    api.post(`/drafts/${id}/export`, {}, { responseType: "blob" }),
+  /** Insert auto-fixed clause content for a specific adversarial finding */
+  autoInsertFix: (draftId: string, blockId: string, finding: AdversarialFinding) =>
+    api.post(`/drafts/${draftId}/auto-insert-fix`, { finding, block_id: blockId }),
 };
+
+
+
+// ─── Enterprise Agentic Drafting API ─────────────────────────────────────────
+
+export interface DraftEvent {
+  type:
+    | "session_created"
+    | "stage"
+    | "intent_analyzed"
+    | "needs_input"
+    | "redaction_complete"
+    | "research_update"
+    | "sources_ready"
+    | "resuming"
+    | "assembly_started"
+    | "red_team_complete"
+    | "draft_ready"
+    | "saved"
+    | "error";
+  timestamp?: string;
+  session_id?: string;
+  stage?: string;
+  label?: string;
+  progress?: number;
+  intent?: DraftIntent;
+  questions?: DraftQuestion[];
+  sources?: DraftSource[];
+  all_sources?: DraftSource[];
+  ranking_summary?: string;
+  sufficient?: boolean;
+  blocks?: ContractBlock[];
+  html_content?: string;
+  issues?: DraftIssue[];
+  defined_terms?: { term: string; definition: string }[];
+  missing_clauses?: string[];
+  title?: string;
+  contract_type?: string;
+  draft_id?: string;
+  agent?: string;
+  count?: number;
+  tokens_masked?: number;
+  message?: string;
+  approved_count?: number;
+  // Adversarial red-team fields
+  findings?: AdversarialFinding[];
+  overall_risk?: string;
+  overall_assessment?: string;
+  missing_sections?: string[];
+  finding_count?: number;
+  critical_count?: number;
+  adversarial_findings?: AdversarialFinding[];
+  adversarial_risk?: string;
+  adversarial_assessment?: string;
+  adversarial_missing_sections?: string[];
+}
+
+export interface DraftIntent {
+  contract_type: string;
+  contract_type_label: string;
+  parties: { name: string | null; role: string }[];
+  jurisdiction: string;
+  purpose: string;
+  risk_level: "low" | "medium" | "high";
+  governing_law: string;
+  can_proceed: boolean;
+}
+
+export interface DraftQuestion {
+  id: string;
+  question: string;
+  type: "text" | "date" | "number" | "textarea" | "select";
+  options?: string[];
+}
+
+export interface DraftSource {
+  source_id: string;
+  source_name: string;
+  url: string;
+  domain: string;
+  snippet: string;
+  source_type: "statute" | "case_law" | "regulation" | "template" | "precedent";
+  jurisdiction: string;
+  relevance_note?: string;
+  relevance_score?: number;
+  authority_score?: number;
+  combined_score?: number;
+  include?: boolean;
+  reason?: string;
+  key_provisions?: string[];
+  clause_type?: string;
+}
+
+export interface ContractBlock {
+  block_id: string;
+  clause_number: string;
+  clause_type: string;
+  heading: string;
+  content: string;
+  is_locked: boolean;
+  provenance: "template" | "precedent" | "generated";
+  precedent_source?: string;
+  needs_review: boolean;
+  review_reason?: string;
+  variable_slots_filled?: Record<string, string>;
+}
+
+export interface DraftIssue {
+  severity: "high" | "medium" | "low";
+  description: string;
+  clause_affected?: string;
+}
+
+export interface AdversarialFinding {
+  block_id: string;
+  clause_ref: string;
+  problematic_text: string;
+  exploit: string;
+  severity: "critical" | "high" | "medium";
+  category: string;
+  suggested_fix: string;
+}
+
+export const draftSessionsApi = {
+  /**
+   * Start a new agentic drafting session (SSE stream).
+   * Returns abort function.
+   */
+  startSession: (
+    prompt: string,
+    onEvent: (event: DraftEvent) => void,
+    onError?: (err: Error) => void,
+    onDone?: () => void
+  ): (() => void) => {
+    const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+    const baseUrl = base.startsWith("/") ? `${base}/v1` : `${base}/api/v1`;
+    const token = useAuthStore.getState().token || "";
+    const controller = new AbortController();
+
+    (async () => {
+      try {
+        const res = await fetch(`${baseUrl}/drafts/sessions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ prompt }),
+          signal: controller.signal,
+        });
+        if (!res.ok) throw new Error(`Session start failed: ${res.status}`);
+        await _consumeSSE(res, onEvent);
+        onDone?.();
+      } catch (err: any) {
+        if (err.name !== "AbortError")
+          onError?.(err instanceof Error ? err : new Error(String(err)));
+      }
+    })();
+
+    return () => controller.abort();
+  },
+
+  /**
+   * Submit follow-up answers and resume orchestration (SSE stream).
+   */
+  submitContext: (
+    sessionId: string,
+    answers: Record<string, string>,
+    onEvent: (event: DraftEvent) => void,
+    onError?: (err: Error) => void,
+    onDone?: () => void
+  ): (() => void) => {
+    const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+    const baseUrl = base.startsWith("/") ? `${base}/v1` : `${base}/api/v1`;
+    const token = useAuthStore.getState().token || "";
+    const controller = new AbortController();
+
+    (async () => {
+      try {
+        const res = await fetch(`${baseUrl}/drafts/sessions/${sessionId}/context`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ answers }),
+          signal: controller.signal,
+        });
+        if (!res.ok) throw new Error(`Context submit failed: ${res.status}`);
+        await _consumeSSE(res, onEvent);
+        onDone?.();
+      } catch (err: any) {
+        if (err.name !== "AbortError")
+          onError?.(err instanceof Error ? err : new Error(String(err)));
+      }
+    })();
+
+    return () => controller.abort();
+  },
+
+  /**
+   * Approve selected sources and trigger Claude Opus assembly (SSE stream).
+   */
+  approveSources: (
+    sessionId: string,
+    approvedSourceIds: string[],
+    onEvent: (event: DraftEvent) => void,
+    onError?: (err: Error) => void,
+    onDone?: () => void
+  ): (() => void) => {
+    const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+    const baseUrl = base.startsWith("/") ? `${base}/v1` : `${base}/api/v1`;
+    const token = useAuthStore.getState().token || "";
+    const controller = new AbortController();
+
+    (async () => {
+      try {
+        const res = await fetch(`${baseUrl}/drafts/sessions/${sessionId}/approve-sources`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ approved_source_ids: approvedSourceIds }),
+          signal: controller.signal,
+        });
+        if (!res.ok) throw new Error(`Source approval failed: ${res.status}`);
+        await _consumeSSE(res, onEvent);
+        onDone?.();
+      } catch (err: any) {
+        if (err.name !== "AbortError")
+          onError?.(err instanceof Error ? err : new Error(String(err)));
+      }
+    })();
+
+    return () => controller.abort();
+  },
+
+  getSession: (sessionId: string) => api.get(`/drafts/sessions/${sessionId}`),
+  listSessions: () => api.get("/drafts/sessions"),
+};
+
+async function _consumeSSE(response: Response, onEvent: (e: DraftEvent) => void) {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("No response body");
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      if (line.startsWith("data: ")) {
+        try {
+          onEvent(JSON.parse(line.slice(6)));
+        } catch {
+          // skip malformed chunk
+        }
+      }
+    }
+  }
+}
+
 
 // Translations
 export const translationsApi = {

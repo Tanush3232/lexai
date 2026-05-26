@@ -19,6 +19,7 @@ from app.api.v1 import (
     documents,
     chat,
     drafts,
+    draft_sessions,     # ← Enterprise agentic drafting
     translations,
     audit,
     clauses,
@@ -100,6 +101,7 @@ app.include_router(documents.router, prefix="/api/v1/documents", tags=["document
 app.include_router(chat.router, prefix="/api/v1/chat", tags=["chat"])
 app.include_router(clauses.router, prefix="/api/v1/clauses", tags=["clauses"])
 app.include_router(drafts.router, prefix="/api/v1/drafts", tags=["drafts"])
+app.include_router(draft_sessions.router, prefix="/api/v1/drafts", tags=["draft-sessions"])  # SSE agentic flow
 app.include_router(translations.router, prefix="/api/v1/translations", tags=["translations"])
 app.include_router(audit.router, prefix="/api/v1/audit", tags=["audit"])
 app.include_router(usage.router, prefix="/api/v1/usage", tags=["usage"])

@@ -16,6 +16,7 @@ python-multipart==0.0.9
 # AI / LLM
 google-generativeai==0.5.4
 langgraph==0.1.5
+anthropic==0.40.0
 
 # Vector store
 qdrant-client==1.9.1
