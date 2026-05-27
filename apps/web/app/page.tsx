@@ -1,13 +1,30 @@
 "use client";
 import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuthStore } from "@/lib/stores/auth-store";
 
 export default function HomePage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { isAuthenticated, _hasHydrated } = useAuthStore();
 
   useEffect(() => {
+    const code = searchParams.get("code");
+    const state = searchParams.get("state");
+    const msError = searchParams.get("error");
+
+    // Microsoft SSO redirects back to the root (/) with ?code=... — forward to our handler
+    if (code || msError) {
+      const params = new URLSearchParams();
+      if (code) params.set("code", code);
+      if (state) params.set("state", state);
+      if (msError) params.set("error", msError);
+      const errDesc = searchParams.get("error_description");
+      if (errDesc) params.set("error_description", errDesc);
+      router.replace(`/auth/microsoft/callback?${params.toString()}`);
+      return;
+    }
+
     if (_hasHydrated) {
       if (isAuthenticated()) {
         router.replace("/dashboard/acts");
@@ -15,7 +32,7 @@ export default function HomePage() {
         router.replace("/login");
       }
     }
-  }, [_hasHydrated, isAuthenticated, router]);
+  }, [_hasHydrated, isAuthenticated, router, searchParams]);
 
   return (
     <div className="min-h-screen flex items-center justify-center" style={{ background: "var(--bg-primary)" }}>

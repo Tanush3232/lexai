@@ -102,5 +102,17 @@ class Settings(BaseSettings):
     # If True, uses the EMAIL_USER and EMAIL_PASS to get a Delegated token (avoids Admin Consent)
     GRAPH_USE_DELEGATED_AUTH: bool = True
 
+    # ── Microsoft SSO (Entra ID / Azure AD) ──────────────────────────────────
+    # Used for "Continue with Microsoft" login on the login page.
+    # Only existing users (matched by email) can log in — no auto-provisioning.
+    # Set all values in .env — never hardcode credentials here.
+    AZURE_TENANT_ID: str = ""
+    AZURE_CLIENT_ID: str = ""
+    AZURE_CLIENT_SECRET: str = ""
+    # Must match a Redirect URI registered in Azure Portal → Authentication
+    # Local:  http://localhost:3000/auth/microsoft/callback
+    # Prod:   https://YOURDOMAIN/auth/microsoft/callback
+    AZURE_REDIRECT_URI: str = "http://localhost:3000/auth/microsoft/callback"
+
 
 settings = Settings()

@@ -13,10 +13,26 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [msLoading, setMsLoading] = useState(false);
 
   // Errors — cleared ONLY when user re-submits, never on keystroke
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string }>({});
+
+  const handleMicrosoftLogin = useCallback(async () => {
+    setMsLoading(true);
+    setError(null);
+    try {
+      // Pass current origin so backend picks the right redirect_uri for this environment
+      const origin = window.location.origin; // e.g. http://localhost:3000 or https://lexai.zuarione.com
+      const res = await authApi.getMicrosoftLoginUrl(origin);
+      // Redirect the browser to Microsoft's login page
+      window.location.href = res.data.url;
+    } catch {
+      setError("Could not reach Microsoft login. Please try again.");
+      setMsLoading(false);
+    }
+  }, []);
 
   const handleLogin = useCallback(async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -168,8 +184,8 @@ export default function LoginPage() {
           >
             Sign in to your account
           </h1>
-          <p style={{ fontSize: "13px", color: "var(--text3)", margin: "0 0 28px 0" }}>
-            Use your company email and assigned password.
+          <p style={{ fontSize: "13px", color: "var(--text3)", margin: "0 0 24px 0" }}>
+            Use your company credentials to access LexAI.
           </p>
 
           {/* Global Error Banner */}
@@ -193,6 +209,72 @@ export default function LoginPage() {
               </p>
             </div>
           )}
+
+          {/* ── Continue with Microsoft ── */}
+          <button
+            id="btn-microsoft-sso"
+            type="button"
+            onClick={handleMicrosoftLogin}
+            disabled={msLoading || loading}
+            style={{
+              width: "100%",
+              height: "44px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "10px",
+              background: "#fff",
+              border: "1.5px solid #d1d5db",
+              borderRadius: "9px",
+              fontFamily: "inherit",
+              fontSize: "14px",
+              fontWeight: 600,
+              color: "#111827",
+              cursor: msLoading || loading ? "not-allowed" : "pointer",
+              marginBottom: "20px",
+              transition: "border-color 0.15s, box-shadow 0.15s",
+              opacity: msLoading || loading ? 0.7 : 1,
+            }}
+            onMouseEnter={(e) => {
+              if (!msLoading && !loading) {
+                e.currentTarget.style.borderColor = "#6b7280";
+                e.currentTarget.style.boxShadow = "0 0 0 3px rgba(0,0,0,0.05)";
+              }
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.borderColor = "#d1d5db";
+              e.currentTarget.style.boxShadow = "none";
+            }}
+          >
+            {msLoading ? (
+              <Loader2 size={16} className="spin" />
+            ) : (
+              /* Official Microsoft logo (4-square) */
+              <svg width="18" height="18" viewBox="0 0 21 21" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
+                <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
+                <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
+                <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
+              </svg>
+            )}
+            {msLoading ? "Redirecting to Microsoft…" : "Continue with Microsoft"}
+          </button>
+
+          {/* ── Divider ── */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "12px",
+              marginBottom: "20px",
+            }}
+          >
+            <div style={{ flex: 1, height: "1px", background: "var(--border)" }} />
+            <span style={{ fontSize: "12px", color: "var(--text3)", whiteSpace: "nowrap" }}>
+              or sign in with email
+            </span>
+            <div style={{ flex: 1, height: "1px", background: "var(--border)" }} />
+          </div>
 
           {/* Using a form tag for accessibility but with manual onSubmit handling */}
           <form onSubmit={handleLogin} noValidate style={{ display: "flex", flexDirection: "column", gap: "18px" }}>

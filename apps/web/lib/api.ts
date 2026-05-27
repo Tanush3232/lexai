@@ -59,6 +59,16 @@ export const authApi = {
   register: (data: { email: string; full_name: string; password: string; role?: string }) =>
     api.post("/auth/register", data),
   me: () => api.get("/auth/me"),
+  /** Get the Microsoft OAuth2 redirect URL from the backend.
+   *  Pass current window.location.origin so backend picks correct redirect_uri. */
+  getMicrosoftLoginUrl: (origin: string) =>
+    api.get<{ url: string }>("/auth/microsoft/login", { params: { origin } }),
+  /** Exchange the code+state received from Microsoft for a LexAI JWT */
+  microsoftCallback: (code: string, state?: string) =>
+    api.get<{ access_token: string; token_type: string; user: any }>(
+      "/auth/microsoft/callback",
+      { params: { code, state } }
+    ),
 };
 
 // Folders
