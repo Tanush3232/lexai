@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { authApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/stores/auth-store";
@@ -17,7 +17,7 @@ import { Loader2, AlertCircle } from "lucide-react";
  *  3. Backend validates the email exists in LexAI (no new user creation)
  *  4. Receives a LexAI JWT and stores it → redirects to /dashboard
  */
-export default function MicrosoftCallbackPage() {
+function MicrosoftCallbackContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const setAuth = useAuthStore((s) => s.setAuth);
@@ -188,5 +188,17 @@ export default function MicrosoftCallbackPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function MicrosoftCallbackPage() {
+  return (
+    <Suspense fallback={
+      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", minHeight: "100vh", background: "var(--bg)" }}>
+        <Loader2 size={32} className="spin" style={{ color: "var(--accent)" }} />
+      </div>
+    }>
+      <MicrosoftCallbackContent />
+    </Suspense>
   );
 }
