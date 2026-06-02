@@ -5,6 +5,7 @@ import { foldersApi, documentsApi, translationsApi } from "@/lib/api";
 import { toast } from "sonner";
 import { X, Loader2, Folder, ChevronDown, Save, Trash2, CheckCircle, AlertTriangle, Languages, ArrowLeft, FileText, Plus } from "lucide-react";
 import { useAuthStore } from "@/lib/stores/auth-store";
+import DocumentViewerModal from "@/app/dashboard/folders/DocumentViewerModal";
 
 // ─── HTML-safe section renderer ───────────────────────────────────────────────
 
@@ -498,7 +499,8 @@ export default function TranslationsPage() {
 
   const [searchQuery, setSearchQuery] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 5;
+  const itemsPerPage = 10;
+  const [viewDoc, setViewDoc] = useState<{ id: string; name: string } | null>(null);
 
   // ── Live-poll active job (even after refresh — purely DB-driven) ──
   const { data: liveJob } = useQuery<TranslationJob>({
@@ -690,14 +692,6 @@ export default function TranslationsPage() {
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
-            {flags.length > 0 && (
-              <div className="card" style={{ padding: "16px", background: "var(--amber-light)", border: "1px solid var(--amber)" }}>
-                <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--amber)", marginBottom: "4px" }}>UNCERTAINTY FLAGS ({flags.length})</div>
-                {flags.map((f: any, i: number) => (
-                  <div key={i} style={{ fontSize: "12px", color: "var(--text2)" }}>· {f.location}: {f.reason}</div>
-                ))}
-              </div>
-            )}
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
               <div className="card" style={{ padding: "0" }}>
@@ -705,16 +699,12 @@ export default function TranslationsPage() {
                   ORIGINAL — {activeJob.source_language || "Source"}
                 </div>
                 <div style={{ padding: "24px", fontSize: "13px", lineHeight: "1.6", maxHeight: "60vh", overflowY: "auto" }}>
-                  {useBlocks ? (
-                    translatedBlocks.map((b: any, i: number) => <BlockRenderer key={i} block={b} isTranslated={false} />)
-                  ) : parsedSections ? (
-                    parsedSections.map((s: any, i: number) => (
-                      <div key={i} style={{ marginBottom: "20px" }}>
-                        {s.original_heading && <div style={{ fontWeight: 700, marginBottom: "8px" }}>{s.original_heading}</div>}
-                        <BlockRenderer block={{ type: "paragraph", content: s.original_text }} isTranslated={false} />
-                      </div>
-                    ))
-                  ) : activeJob.original_text}
+                  {parsedSections ? parsedSections.map((s: any, i: number) => (
+                    <div key={i} style={{ marginBottom: "20px" }}>
+                      {s.original_heading && <div style={{ fontWeight: 700, marginBottom: "8px" }}>{s.original_heading}</div>}
+                      <div>{s.original_text}</div>
+                    </div>
+                  )) : activeJob.original_text}
                 </div>
               </div>
 
@@ -723,21 +713,15 @@ export default function TranslationsPage() {
                   TRANSLATED — {activeJob.target_language}
                 </div>
                 <div style={{ padding: "24px", fontSize: "13px", lineHeight: "1.6", maxHeight: "60vh", overflowY: "auto" }}>
-                  {useBlocks ? (
-                    translatedBlocks.map((b: any, i: number) => <BlockRenderer key={i} block={b} isTranslated={true} />)
-                  ) : parsedSections ? (
-                    parsedSections.map((s: any, i: number) => (
-                      <div key={i} style={{ marginBottom: "20px" }}>
-                        {s.translated_heading && <div style={{ fontWeight: 700, color: "var(--accent)", marginBottom: "8px" }}>{s.translated_heading}</div>}
-                        <div style={{ color: "var(--text)" }}>
-                          <BlockRenderer block={{ type: "paragraph", translated_content: s.translated_text }} isTranslated={true} />
-                        </div>
-                        {s.translator_notes && s.translator_notes.map((n: string, ni: number) => (
-                          <div key={ni} style={{ fontSize: "11px", fontStyle: "italic", color: "var(--text3)", marginTop: "6px" }}>Note: {n}</div>
-                        ))}
-                      </div>
-                    ))
-                  ) : activeJob.translated_text}
+                  {parsedSections ? parsedSections.map((s: any, i: number) => (
+                    <div key={i} style={{ marginBottom: "20px" }}>
+                      {s.translated_heading && <div style={{ fontWeight: 700, color: "var(--accent)", marginBottom: "8px" }}>{s.translated_heading}</div>}
+                      <div style={{ color: "var(--text)" }}>{s.translated_text}</div>
+                      {s.translator_notes && s.translator_notes.map((n: string, ni: number) => (
+                        <div key={ni} style={{ fontSize: "11px", fontStyle: "italic", color: "var(--text3)", marginTop: "6px" }}>Note: {n}</div>
+                      ))}
+                    </div>
+                  )) : activeJob.translated_text}
                 </div>
               </div>
             </div>
@@ -886,15 +870,8 @@ export default function TranslationsPage() {
     }
   };
 
-  const handleViewPdf = async (docId: string) => {
-    try {
-      const res = await documentsApi.getFileUrl(docId);
-      if (res.data.url) {
-        window.open(res.data.url, "_blank");
-      }
-    } catch {
-      toast.error("Failed to fetch file URL");
-    }
+  const handleViewPdf = (docId: string, docName: string) => {
+    setViewDoc({ id: docId, name: docName, status: "indexed" } as any);
   };
 
   // ── LIST step (default landing) ────────────────────────────────────────────
@@ -1001,10 +978,10 @@ export default function TranslationsPage() {
                     <td style={{ padding: "16px 24px", textAlign: "right" }}>
                       <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
                         <button 
-                          onClick={() => handleViewPdf(doc.id)}
+                          onClick={() => handleViewPdf(doc.id, doc.name)}
                           style={{ padding: "6px 12px", borderRadius: "6px", border: "1.5px solid var(--border)", background: "white", fontSize: "12px", fontWeight: 600, color: "var(--text2)", cursor: "pointer", display: "flex", alignItems: "center", gap: "6px" }}
                         >
-                          View PDF
+                          View
                         </button>
                         <button 
                           onClick={() => handleDownload(doc.id, doc.name)}
@@ -1063,6 +1040,13 @@ export default function TranslationsPage() {
           )}
         </div>
       </div>
+      
+      {viewDoc && (
+        <DocumentViewerModal
+          doc={viewDoc as any}
+          onClose={() => setViewDoc(null)}
+        />
+      )}
     </div>
   );
 }

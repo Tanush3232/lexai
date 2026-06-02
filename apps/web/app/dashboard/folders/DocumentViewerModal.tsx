@@ -445,46 +445,92 @@ export default function DocumentViewerModal({
   const [docxHtml, setDocxHtml] = useState<string | null>(null);
   const hasFetchedFile = useRef(false);
 
-  // Fetch original file as a blob via authenticated API — works in production
-  // because it goes through Nginx at /api/v1/documents/{id}/download, not port 9000.
-  // hasFetchedFile guards against React Strict Mode double-invocation in dev
-  // which would cause the file to download twice.
+  // Translation side-by-side states
+  const [isTranslation, setIsTranslation] = useState(false);
+  const [origFileUrl, setOrigFileUrl] = useState<string | null>(null);
+  const [origFileUrlLoading, setOrigFileUrlLoading] = useState(false);
+  const [origDocxHtml, setOrigDocxHtml] = useState<string | null>(null);
+  const [origDocName, setOrigDocName] = useState<string | null>(null);
+  const [origPageCount, setOrigPageCount] = useState<number | undefined>(undefined);
+
+  // Fetch original file as a blob via authenticated API
   useEffect(() => {
     if (hasFetchedFile.current) return;
     hasFetchedFile.current = true;
+
     let objectUrl: string | null = null;
-    api
-      .get(`/documents/${doc.id}/download`, { responseType: "blob" })
-      .then(async (r) => {
-        const ct: string = r.headers["content-type"] || "application/octet-stream";
-        setFileContentType(ct);
-        if (ct.includes("pdf")) {
-          // PDF: render inline via iframe with a blob URL
-          objectUrl = URL.createObjectURL(new Blob([r.data], { type: ct }));
-          setFileUrl(objectUrl);
-        } else if (
-          ct.includes("wordprocessingml") ||
-          ct.includes("msword") ||
-          ct.includes("officedocument") ||
-          doc.name.toLowerCase().endsWith(".docx") ||
-          doc.name.toLowerCase().endsWith(".doc")
-        ) {
-          // DOCX: convert to HTML via mammoth and display inline
-          try {
-            const mammoth = (await import("mammoth")).default;
-            const arrayBuffer = await (r.data as Blob).arrayBuffer();
-            const result = await mammoth.convertToHtml({ arrayBuffer });
-            setDocxHtml(result.value || "<p>(Empty document)</p>");
-          } catch {
-            // mammoth failed — fall through to extracted text panel
+    let origObjectUrl: string | null = null;
+
+    const fetchFile = async (documentId: string, docName: string) => {
+      const r = await api.get(`/documents/${documentId}/download`, { responseType: "blob" });
+      const ct: string = r.headers["content-type"] || "application/octet-stream";
+      let url: string | null = null;
+      let html: string | null = null;
+
+      if (ct.includes("pdf")) {
+        url = URL.createObjectURL(new Blob([r.data], { type: ct }));
+      } else if (
+        ct.includes("wordprocessingml") ||
+        ct.includes("msword") ||
+        ct.includes("officedocument") ||
+        docName.toLowerCase().endsWith(".docx") ||
+        docName.toLowerCase().endsWith(".doc")
+      ) {
+        try {
+          const mammoth = (await import("mammoth")).default;
+          const arrayBuffer = await (r.data as Blob).arrayBuffer();
+          const result = await mammoth.convertToHtml({ arrayBuffer });
+          html = result.value || "<p>(Empty document)</p>";
+        } catch {}
+      }
+      return { url, html, ct };
+    };
+
+    const loadAll = async () => {
+      try {
+        let jobIdStr = null;
+        try {
+          const trRes = await api.get(`/translations/by-saved-doc/${doc.id}`);
+          if (trRes.data) {
+            setIsTranslation(true);
+            jobIdStr = trRes.data.document_id;
           }
+        } catch (err) {
+          // Ignore if not a translation
         }
-        // TXT / other: fall through to extracted text panel
-      })
-      .catch(() => {})
-      .finally(() => setFileUrlLoading(false));
+
+        const res = await fetchFile(doc.id, doc.name);
+        setFileUrl(res.url);
+        setDocxHtml(res.html);
+        setFileContentType(res.ct);
+        if (res.url) objectUrl = res.url;
+        setFileUrlLoading(false);
+
+        if (jobIdStr) {
+          setOrigFileUrlLoading(true);
+          try {
+            const origMetaRes = await documentsApi.get(jobIdStr);
+            const origMeta = origMetaRes.data;
+            setOrigDocName(origMeta.name);
+            setOrigPageCount(origMeta.page_count);
+            
+            const origRes = await fetchFile(jobIdStr, origMeta.name);
+            setOrigFileUrl(origRes.url);
+            setOrigDocxHtml(origRes.html);
+            if (origRes.url) origObjectUrl = origRes.url;
+          } catch (e) {}
+          setOrigFileUrlLoading(false);
+        }
+      } catch (e) {
+        setFileUrlLoading(false);
+      }
+    };
+
+    loadAll();
+
     return () => {
       if (objectUrl) URL.revokeObjectURL(objectUrl);
+      if (origObjectUrl) URL.revokeObjectURL(origObjectUrl);
     };
   }, [doc.id, doc.name]);
 
@@ -638,6 +684,41 @@ export default function DocumentViewerModal({
   const hasContent = !contentLoading && (contentData?.sections?.length ?? 0) > 0;
   const docTypeLabel = (treeData?.doc_type ?? "DOCUMENT").replace(/_/g, " ").toUpperCase();
 
+  const renderViewerPane = (
+    url: string | null,
+    html: string | null,
+    loading: boolean,
+    title: string,
+    pageCount?: number
+  ) => {
+    return (
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
+        <div style={{ padding: "8px 16px", background: "var(--bg)", borderBottom: "1px solid var(--border)", fontSize: "11px", fontWeight: 700, color: "var(--text3)", display: "flex", justifyContent: "space-between", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+          <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginRight: "10px" }}>{title}</span>
+          {pageCount ? <span style={{ flexShrink: 0 }}>{pageCount} PAGES</span> : null}
+        </div>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: "var(--bg2)" }}>
+          {loading ? (
+            <div style={{ padding: "40px 56px" }}><SkeletonContent /></div>
+          ) : url ? (
+            <iframe src={url} style={{ width: "100%", height: "100%", border: "none", background: "#fff" }} />
+          ) : html ? (
+            <div
+              style={{
+                flex: 1, height: "100%", overflowY: "auto", background: "#fff",
+                padding: "48px 64px 80px", fontSize: "14px", lineHeight: 1.85,
+                fontFamily: "'Segoe UI', Arial, sans-serif", color: "#1a1916", boxSizing: "border-box",
+              }}
+              dangerouslySetInnerHTML={{ __html: html }}
+            />
+          ) : (
+            <div style={{ padding: "40px", textAlign: "center", color: "var(--text3)" }}>Document content not available</div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return createPortal(
     <>
       {/* Backdrop */}
@@ -672,7 +753,7 @@ export default function DocumentViewerModal({
           style={{
             pointerEvents: "auto",
             width: "100%",
-            maxWidth: "1180px",
+            maxWidth: isTranslation ? "1400px" : "1180px",
             height: "calc(100vh - 40px)",
             maxHeight: "900px",
             background: "var(--white)",
@@ -682,6 +763,7 @@ export default function DocumentViewerModal({
             flexDirection: "column",
             overflow: "hidden",
             border: "1px solid var(--border)",
+            transition: "max-width 0.3s ease",
           }}
         >
           {/* ── Header ─────────────────────────────────────────────────────── */}
@@ -894,99 +976,110 @@ export default function DocumentViewerModal({
               </div>
             </div>
 
-            {/* CENTER PANEL — Original File Viewer */}
-            <div style={{
-              flex: 1, display: "flex", flexDirection: "column",
-              overflow: "hidden", minWidth: 0,
-            }}>
-              {/* Document area — shows the original uploaded file */}
-              <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: "var(--bg2)" }}>
-                {fileUrlLoading ? (
-                  <div style={{ padding: "40px 56px" }}><SkeletonContent /></div>
-                ) : fileUrl ? (
-                  // PDF — render in iframe using blob URL
-                  <iframe
-                    src={fileUrl}
-                    title={doc.name}
-                    style={{ width: "100%", height: "100%", border: "none", background: "#fff" }}
-                  />
-                ) : docxHtml ? (
-                  // DOCX — mammoth-converted HTML, fully scrollable
-                  <div
-                    style={{
-                      flex: 1,
-                      height: "100%",
-                      overflowY: "auto",
-                      background: "#fff",
-                      padding: "48px 64px 80px",
-                      fontSize: "14px",
-                      lineHeight: 1.85,
-                      fontFamily: "'Segoe UI', Arial, sans-serif",
-                      color: "#1a1916",
-                      boxSizing: "border-box",
-                    }}
-                    // eslint-disable-next-line react/no-danger
-                    dangerouslySetInnerHTML={{ __html: docxHtml }}
-                  />
-                ) : (
-                  /* Fallback: extracted text (TXT files, or when mammoth fails) */
-                  <>
-                    {hasContent && <EditorToolbar editorRef={editorRef} />}
-                    <div style={{ flex: 1, overflowY: "auto", background: "var(--white)" }}>
-                      {contentLoading ? (
-                        <div style={{ padding: "40px 56px" }}><SkeletonContent /></div>
-                      ) : contentData?.status === "uploaded" ? (
-                        <div style={{
-                          display: "flex", flexDirection: "column",
-                          alignItems: "center", justifyContent: "center",
-                          padding: "80px 20px", gap: "14px", textAlign: "center",
-                        }}>
-                          <Clock size={40} style={{ color: "var(--accent)", opacity: 0.4 }} />
-                          <p style={{ fontSize: "15px", fontWeight: 600, color: "var(--text)" }}>
-                            Indexing in progress
-                          </p>
-                          <p style={{ fontSize: "13px", color: "var(--text3)", maxWidth: "300px", lineHeight: 1.6 }}>
-                            Your document is being parsed. Please check back shortly.
-                          </p>
-                        </div>
-                      ) : (
-                        <div
-                          ref={editorRef}
-                          contentEditable
-                          suppressContentEditableWarning
-                          spellCheck
-                          style={{
-                            outline: "none",
-                            minHeight: "100%",
-                            padding: "48px 64px 80px",
-                            fontSize: "14px",
-                            lineHeight: 1.85,
-                            fontFamily: "Georgia, 'Times New Roman', serif",
-                            color: "var(--text)",
-                            caretColor: "var(--accent)",
-                          }}
-                        />
-                      )}
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* Footer */}
+            {/* CENTER PANEL */}
+            {isTranslation ? (
               <div style={{
-                flexShrink: 0, borderTop: "1px solid var(--border)",
-                padding: "6px 16px", display: "flex",
-                alignItems: "center", justifyContent: "space-between",
-                background: "var(--bg)",
+                flex: 1, display: "flex", flexDirection: "row",
+                overflow: "hidden", minWidth: 0, background: "var(--bg2)"
               }}>
-                <span style={{ fontSize: "11px", color: "var(--text3)" }}>
-                  {fileUrl ? "PDF · Original Document" : docxHtml ? "Word Document · Rendered" : "Extracted Text · Editable"}
-                </span>
-                <span style={{ fontSize: "11px", color: "var(--text3)" }}>
-                  {doc.page_count ? `${doc.page_count} pages` : ""}
-                </span>
+                {renderViewerPane(origFileUrl, origDocxHtml, origFileUrlLoading, `ORIGINAL — ${origDocName || "Source"}`, origPageCount)}
+                <div style={{ width: "1px", background: "var(--border)", flexShrink: 0 }} />
+                {renderViewerPane(fileUrl, docxHtml, fileUrlLoading, `TRANSLATED — ${doc.name}`, doc.page_count)}
               </div>
-            </div>
+            ) : (
+              <div style={{
+                flex: 1, display: "flex", flexDirection: "column",
+                overflow: "hidden", minWidth: 0,
+              }}>
+                {/* Document area — shows the original uploaded file */}
+                <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: "var(--bg2)" }}>
+                  {fileUrlLoading ? (
+                    <div style={{ padding: "40px 56px" }}><SkeletonContent /></div>
+                  ) : fileUrl ? (
+                    // PDF — render in iframe using blob URL
+                    <iframe
+                      src={fileUrl}
+                      title={doc.name}
+                      style={{ width: "100%", height: "100%", border: "none", background: "#fff" }}
+                    />
+                  ) : docxHtml ? (
+                    // DOCX — mammoth-converted HTML, fully scrollable
+                    <div
+                      style={{
+                        flex: 1,
+                        height: "100%",
+                        overflowY: "auto",
+                        background: "#fff",
+                        padding: "48px 64px 80px",
+                        fontSize: "14px",
+                        lineHeight: 1.85,
+                        fontFamily: "'Segoe UI', Arial, sans-serif",
+                        color: "#1a1916",
+                        boxSizing: "border-box",
+                      }}
+                      // eslint-disable-next-line react/no-danger
+                      dangerouslySetInnerHTML={{ __html: docxHtml }}
+                    />
+                  ) : (
+                    /* Fallback: extracted text (TXT files, or when mammoth fails) */
+                    <>
+                      {hasContent && <EditorToolbar editorRef={editorRef} />}
+                      <div style={{ flex: 1, overflowY: "auto", background: "var(--white)" }}>
+                        {contentLoading ? (
+                          <div style={{ padding: "40px 56px" }}><SkeletonContent /></div>
+                        ) : contentData?.status === "uploaded" ? (
+                          <div style={{
+                            display: "flex", flexDirection: "column",
+                            alignItems: "center", justifyContent: "center",
+                            padding: "80px 20px", gap: "14px", textAlign: "center",
+                          }}>
+                            <Clock size={40} style={{ color: "var(--accent)", opacity: 0.4 }} />
+                            <p style={{ fontSize: "15px", fontWeight: 600, color: "var(--text)" }}>
+                              Indexing in progress
+                            </p>
+                            <p style={{ fontSize: "13px", color: "var(--text3)", maxWidth: "300px", lineHeight: 1.6 }}>
+                              Your document is being parsed. Please check back shortly.
+                            </p>
+                          </div>
+                        ) : (
+                          <div
+                            ref={editorRef}
+                            contentEditable
+                            suppressContentEditableWarning
+                            spellCheck
+                            style={{
+                              outline: "none",
+                              minHeight: "100%",
+                              padding: "48px 64px 80px",
+                              fontSize: "14px",
+                              lineHeight: 1.85,
+                              fontFamily: "Georgia, 'Times New Roman', serif",
+                              color: "var(--text)",
+                              caretColor: "var(--accent)",
+                            }}
+                          />
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* Footer */}
+                <div style={{
+                  flexShrink: 0, borderTop: "1px solid var(--border)",
+                  padding: "6px 16px", display: "flex",
+                  alignItems: "center", justifyContent: "space-between",
+                  background: "var(--bg)",
+                }}>
+                  <span style={{ fontSize: "11px", color: "var(--text3)" }}>
+                    {fileUrl ? "PDF · Original Document" : docxHtml ? "Word Document · Rendered" : "Extracted Text · Editable"}
+                  </span>
+                  <span style={{ fontSize: "11px", color: "var(--text3)" }}>
+                    {doc.page_count ? `${doc.page_count} pages` : ""}
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>

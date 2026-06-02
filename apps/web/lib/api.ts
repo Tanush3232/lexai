@@ -396,6 +396,7 @@ export const translationsApi = {
   start: (documentId: string, targetLanguage: string) =>
     api.post("/translations/", { document_id: documentId, target_language: targetLanguage }),
   get: (jobId: string) => api.get(`/translations/${jobId}`),
+  getBySavedDoc: (documentId: string) => api.get(`/translations/by-saved-doc/${documentId}`),
   listByDocument: (documentId: string) => api.get(`/translations/document/${documentId}`),
   save: (jobId: string) => api.post(`/translations/${jobId}/save`),
   cancel: (jobId: string) => api.post(`/translations/${jobId}/cancel`),

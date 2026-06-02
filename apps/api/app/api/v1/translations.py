@@ -151,6 +151,20 @@ async def cancel_all_translations(
     return {"message": f"Cancelled {count} jobs"}
 
 
+@router.get("/by-saved-doc/{document_id}", response_model=TranslationResult)
+async def get_translation_by_saved_doc(
+    document_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    """Get a translation job by its saved translated document ID."""
+    result = await session.exec(select(TranslationJob).where(TranslationJob.saved_document_id == document_id))
+    job = result.first()
+    if not job or job.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Translation job not found for this document")
+    return job
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Output format helpers
 # ──────────────────────────────────────────────────────────────────────────────
