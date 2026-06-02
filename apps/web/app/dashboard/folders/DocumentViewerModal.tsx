@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
-import { documentsApi } from "@/lib/api";
+import { api, documentsApi } from "@/lib/api";
 import {
   X, FileText, BookOpen, ChevronDown, ChevronRight,
   AlertCircle, Clock, Bold, Italic, Underline,
@@ -442,13 +442,21 @@ export default function DocumentViewerModal({
   const [fileUrl, setFileUrl] = useState<string | null>(null);
   const [fileUrlLoading, setFileUrlLoading] = useState(true);
 
-  // Fetch original file URL from MinIO
+  // Fetch original file as a blob via authenticated API — works in production
+  // because it goes through Nginx at /api/v1/documents/{id}/download, not port 9000.
   useEffect(() => {
-    documentsApi
-      .getFileUrl(doc.id)
-      .then((r) => setFileUrl(r.data.url))
+    let objectUrl: string | null = null;
+    api
+      .get(`/documents/${doc.id}/download`, { responseType: "blob" })
+      .then((r) => {
+        objectUrl = URL.createObjectURL(new Blob([r.data], { type: r.headers["content-type"] || "application/octet-stream" }));
+        setFileUrl(objectUrl);
+      })
       .catch(() => {})
       .finally(() => setFileUrlLoading(false));
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
   }, [doc.id]);
 
   // Fetch AI tree – polls while pending (max 30 polls = 150s then fall through)

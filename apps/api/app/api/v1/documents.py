@@ -238,14 +238,13 @@ async def download_document(
     return Response(
         content=file_bytes,
         media_type=doc.content_type,
-        headers={"Content-Disposition": f'attachment; filename="{doc.name}"'},
+        headers={"Content-Disposition": f'inline; filename="{doc.name}"'},
     )
 
 
 @router.get("/{document_id}/file-url")
 async def get_document_file_url(
     document_id: str,
-    request: Request,
     session: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ):
@@ -260,14 +259,12 @@ async def get_document_file_url(
     if not doc or doc.owner_id != current_user.id:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    # Dynamic host detection: use same hostname that the browser used to hit the API
-    request_host = request.headers.get("host", "localhost:8000")
-    api_hostname = request_host.split(":")[0]  # strip port
-    minio_base = f"http://{api_hostname}:9000"
-    bucket = "lexai-documents"
-    file_url = f"{minio_base}/{bucket}/{doc.storage_key}"
-
-    return {"url": file_url, "content_type": doc.content_type, "name": doc.name}
+    # Return the backend streaming endpoint instead of a direct MinIO URL.
+    # A direct MinIO URL (port 9000) only works locally; in production it is
+    # blocked by the firewall/HTTPS mixed-content policy.
+    # The /download endpoint streams bytes through FastAPI → Nginx → browser
+    # and is fully authenticated, so this is also more secure.
+    return {"url": f"/api/v1/documents/{document_id}/download", "content_type": doc.content_type, "name": doc.name}
 
 
 
