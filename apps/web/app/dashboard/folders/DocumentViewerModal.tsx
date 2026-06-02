@@ -441,23 +441,52 @@ export default function DocumentViewerModal({
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [fileUrl, setFileUrl] = useState<string | null>(null);
   const [fileUrlLoading, setFileUrlLoading] = useState(true);
+  const [fileContentType, setFileContentType] = useState<string | null>(null);
+  const [docxHtml, setDocxHtml] = useState<string | null>(null);
+  const hasFetchedFile = useRef(false);
 
   // Fetch original file as a blob via authenticated API — works in production
   // because it goes through Nginx at /api/v1/documents/{id}/download, not port 9000.
+  // hasFetchedFile guards against React Strict Mode double-invocation in dev
+  // which would cause the file to download twice.
   useEffect(() => {
+    if (hasFetchedFile.current) return;
+    hasFetchedFile.current = true;
     let objectUrl: string | null = null;
     api
       .get(`/documents/${doc.id}/download`, { responseType: "blob" })
-      .then((r) => {
-        objectUrl = URL.createObjectURL(new Blob([r.data], { type: r.headers["content-type"] || "application/octet-stream" }));
-        setFileUrl(objectUrl);
+      .then(async (r) => {
+        const ct: string = r.headers["content-type"] || "application/octet-stream";
+        setFileContentType(ct);
+        if (ct.includes("pdf")) {
+          // PDF: render inline via iframe with a blob URL
+          objectUrl = URL.createObjectURL(new Blob([r.data], { type: ct }));
+          setFileUrl(objectUrl);
+        } else if (
+          ct.includes("wordprocessingml") ||
+          ct.includes("msword") ||
+          ct.includes("officedocument") ||
+          doc.name.toLowerCase().endsWith(".docx") ||
+          doc.name.toLowerCase().endsWith(".doc")
+        ) {
+          // DOCX: convert to HTML via mammoth and display inline
+          try {
+            const mammoth = (await import("mammoth")).default;
+            const arrayBuffer = await (r.data as Blob).arrayBuffer();
+            const result = await mammoth.convertToHtml({ arrayBuffer });
+            setDocxHtml(result.value || "<p>(Empty document)</p>");
+          } catch {
+            // mammoth failed — fall through to extracted text panel
+          }
+        }
+        // TXT / other: fall through to extracted text panel
       })
       .catch(() => {})
       .finally(() => setFileUrlLoading(false));
     return () => {
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [doc.id]);
+  }, [doc.id, doc.name]);
 
   // Fetch AI tree – polls while pending (max 30 polls = 150s then fall through)
   const fetchTree = useCallback(async () => {
@@ -871,22 +900,36 @@ export default function DocumentViewerModal({
               overflow: "hidden", minWidth: 0,
             }}>
               {/* Document area — shows the original uploaded file */}
-              <div style={{ flex: 1, overflow: "hidden", background: "var(--bg2)" }}>
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: "var(--bg2)" }}>
                 {fileUrlLoading ? (
                   <div style={{ padding: "40px 56px" }}><SkeletonContent /></div>
                 ) : fileUrl ? (
+                  // PDF — render in iframe using blob URL
                   <iframe
                     src={fileUrl}
                     title={doc.name}
+                    style={{ width: "100%", height: "100%", border: "none", background: "#fff" }}
+                  />
+                ) : docxHtml ? (
+                  // DOCX — mammoth-converted HTML, fully scrollable
+                  <div
                     style={{
-                      width: "100%",
+                      flex: 1,
                       height: "100%",
-                      border: "none",
+                      overflowY: "auto",
                       background: "#fff",
+                      padding: "48px 64px 80px",
+                      fontSize: "14px",
+                      lineHeight: 1.85,
+                      fontFamily: "'Segoe UI', Arial, sans-serif",
+                      color: "#1a1916",
+                      boxSizing: "border-box",
                     }}
+                    // eslint-disable-next-line react/no-danger
+                    dangerouslySetInnerHTML={{ __html: docxHtml }}
                   />
                 ) : (
-                  /* Fallback: show extracted text if original file URL is unavailable */
+                  /* Fallback: extracted text (TXT files, or when mammoth fails) */
                   <>
                     {hasContent && <EditorToolbar editorRef={editorRef} />}
                     <div style={{ flex: 1, overflowY: "auto", background: "var(--white)" }}>
@@ -937,7 +980,7 @@ export default function DocumentViewerModal({
                 background: "var(--bg)",
               }}>
                 <span style={{ fontSize: "11px", color: "var(--text3)" }}>
-                  {fileUrl ? "Original Document" : "Extracted Text · Editable"}
+                  {fileUrl ? "PDF · Original Document" : docxHtml ? "Word Document · Rendered" : "Extracted Text · Editable"}
                 </span>
                 <span style={{ fontSize: "11px", color: "var(--text3)" }}>
                   {doc.page_count ? `${doc.page_count} pages` : ""}
