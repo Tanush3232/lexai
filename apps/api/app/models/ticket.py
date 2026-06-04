@@ -19,6 +19,7 @@ class TicketBase(SQLModel):
     title: str
     status: str = Field(default="open")     # open | in_progress | closed
     priority: str = Field(default="medium")  # low | medium | high | urgent
+    request_id: Optional[str] = Field(default=None, index=True, unique=True, description="External SharePoint RequestID")
 
 
 class Ticket(TicketBase, table=True):
@@ -113,4 +114,23 @@ class EmailLogRead(SQLModel):
     event_type: str
     email_metadata: Optional[str]
     sent_at: datetime
+
+
+# ─── Attachment ───────────────────────────────────────────────────────────────
+
+class AttachmentBase(SQLModel):
+    ticket_id: str = Field(foreign_key="tickets.id", index=True)
+    file_name: str
+    file_url: str
+    entity: Optional[str] = Field(default=None)
+
+class Attachment(AttachmentBase, table=True):
+    __tablename__ = "attachments"
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class AttachmentRead(AttachmentBase):
+    id: str
+    created_at: datetime
 

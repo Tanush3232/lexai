@@ -11,6 +11,7 @@ type TicketDetails = {
   ticket: { id: string; title: string; status: string; priority: string; created_at: string };
   participants: Participant[];
   messages: Message[];
+  attachments: { id: string; file_name: string; file_url: string; entity?: string; created_at: string }[];
 };
 
 export default function TicketDetailsPage() {
@@ -159,6 +160,20 @@ export default function TicketDetailsPage() {
             ))}
           </div>
         </div>
+
+        {data.attachments && data.attachments.length > 0 && (
+          <div>
+            <div style={{ fontSize: "12px", fontWeight: 600, color: "#64748b", textTransform: "uppercase", marginBottom: "8px" }}>Attachments ({data.attachments.length})</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+              {data.attachments.map(att => (
+                <a key={att.id} href={att.file_url} target="_blank" rel="noopener noreferrer" style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0", textDecoration: "none", color: "#0f172a", backgroundColor: "#f8fafc" }}>
+                  <span style={{ fontSize: "16px" }}>📎</span>
+                  <span style={{ fontSize: "13px", fontWeight: "500", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{att.file_name}</span>
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* RIGHT: Chat */}

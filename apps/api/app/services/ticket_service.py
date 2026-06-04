@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select, func
 from fastapi import HTTPException
 
-from app.models.ticket import Ticket, TicketUser, EmailThread
+from app.models.ticket import Ticket, TicketUser, EmailThread, Attachment
 from app.models.message import Message
 from app.models.user import User
 from app.services.legal_email_service import send_ticket_assignment, send_message_notification
@@ -82,11 +82,27 @@ async def get_ticket_with_details(session: AsyncSession, ticket_id: str, current
             "sender_name": u.full_name,
         })
 
+    # Get attachments
+    atts_result = await session.exec(
+        select(Attachment).where(Attachment.ticket_id == ticket_id).order_by(Attachment.created_at.asc())
+    )
+    attachments = []
+    for a in atts_result.all():
+        attachments.append({
+            "id": a.id,
+            "file_name": a.file_name,
+            "file_url": a.file_url,
+            "entity": a.entity,
+            "created_at": a.created_at
+        })
+
     return {
         "ticket": ticket.model_dump(),
         "participants": participants,
         "messages": messages,
+        "attachments": attachments,
     }
+
 
 async def list_tickets(
     session: AsyncSession,

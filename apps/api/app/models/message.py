@@ -14,7 +14,7 @@ from sqlalchemy import Text, Column
 class MessageBase(SQLModel):
     ticket_id: str = Field(foreign_key="tickets.id", index=True)
     sender_id: str = Field(foreign_key="users.id", index=True)
-    source: str = Field(default="app")  # app | email
+    source: str = Field(default="app")  # app | email | sharepoint
     content: str = Field(sa_column=Column(Text))
 
 
