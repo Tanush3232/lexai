@@ -22,12 +22,13 @@ router = APIRouter()
 
 @router.post("/register", response_model=UserRead, status_code=201)
 async def register(body: UserCreate, session: AsyncSession = Depends(get_session)):
-    # Check email unique
-    existing = await session.exec(select(User).where(User.email == body.email))
+    # Normalize email to lowercase before any check or storage
+    normalized_email = body.email.strip().lower()
+    existing = await session.exec(select(User).where(func.lower(User.email) == normalized_email))
     if existing.first():
         raise HTTPException(status_code=409, detail="Email already registered")
     user = User(
-        email=body.email,
+        email=normalized_email,   # always stored lowercase
         full_name=body.full_name,
         role=body.role,
         hashed_password=hash_password(body.password),

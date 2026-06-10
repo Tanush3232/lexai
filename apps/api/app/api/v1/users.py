@@ -2,10 +2,9 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel import select, SQLModel
+from sqlalchemy import func, delete
 
 from app.core.database import get_session
-from sqlalchemy import delete
-
 from app.core.auth import get_current_user, hash_password
 from app.models.user import User, UserCreate, UserRead, UserBase
 
@@ -38,12 +37,15 @@ async def create_user(
 ):
     if current_user.role not in ["ops_admin", "super_admin"]:
         raise HTTPException(status_code=403, detail="Not authorized to create users")
-    # Check if user exists
-    result = await session.execute(select(User).where(User.email == user_in.email))
+    # Normalize email to lowercase always
+    normalized_email = user_in.email.strip().lower()
+    result = await session.execute(select(User).where(func.lower(User.email) == normalized_email))
     if result.scalars().first():
         raise HTTPException(status_code=400, detail="Email already registered")
-
-    user = User.model_validate(user_in, update={"hashed_password": hash_password(user_in.password)})
+    user = User.model_validate(user_in, update={
+        "email": normalized_email,
+        "hashed_password": hash_password(user_in.password),
+    })
     session.add(user)
     await session.commit()
     await session.refresh(user)
@@ -61,8 +63,11 @@ async def update_user(
     user = await session.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     update_data = user_in.model_dump(exclude_unset=True)
+    # If email is being updated, normalize it to lowercase
+    if "email" in update_data and update_data["email"]:
+        update_data["email"] = update_data["email"].strip().lower()
     user.sqlmodel_update(update_data)
     session.add(user)
     await session.commit()
@@ -153,8 +158,23 @@ async def delete_user(
         
         # 6. Audit Logs
         await session.execute(delete(AuditLog).where(AuditLog.user_id == user_id))
-        
-        # 7. Finally, delete the user
+
+        # 7. Web Search — citations first (FK → sessions), then sessions (FK → users)
+        from app.models.web_search import WebSearchSession, WebSearchCitation
+        ws_sessions = await session.execute(
+            select(WebSearchSession).where(WebSearchSession.user_id == user_id)
+        )
+        for ws in ws_sessions.scalars().all():
+            await session.execute(
+                delete(WebSearchCitation).where(WebSearchCitation.session_id == ws.id)
+            )
+            await session.delete(ws)
+
+        # 8. Ticket participations (TicketUser rows where this user is assignee/watcher)
+        from app.models.ticket import TicketUser
+        await session.execute(delete(TicketUser).where(TicketUser.user_id == user_id))
+
+        # 9. Finally, delete the user
         await session.delete(user)
         await session.commit()
     except Exception as e:

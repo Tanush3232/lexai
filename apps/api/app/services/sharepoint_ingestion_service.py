@@ -20,6 +20,7 @@ from typing import Optional
 from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func
 from sqlmodel import select
 
 from app.models.ticket import Ticket, Attachment
@@ -57,7 +58,9 @@ async def _resolve_user(session: AsyncSession, email: Optional[str]) -> Optional
     """
     if not email:
         return None
-    result = await session.exec(select(User).where(User.email == email.lower().strip()))
+    # Case-insensitive: lower() both sides so "Vivek.Kumar@X.com" matches "vivek.kumar@x.com"
+    addr = email.lower().strip()
+    result = await session.exec(select(User).where(func.lower(User.email) == addr))
     return result.first()
 
 
@@ -103,8 +106,8 @@ async def _sync_watchers_from_emails(
             addr = raw_email.strip().lower()
             if not addr or addr in skip_set:
                 continue
-            # Look up LexAI user by email (already lowercased)
-            u_result = await session.exec(select(User).where(User.email == addr))
+            # Case-insensitive lookup — func.lower() on DB side, addr already lowercased
+            u_result = await session.exec(select(User).where(func.lower(User.email) == addr))
             found_user = u_result.first()
             if not found_user:
                 continue
