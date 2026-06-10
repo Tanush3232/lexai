@@ -65,11 +65,20 @@ class RequestPayload(BaseModel):
     """
     Mirrors the SharePoint Requests List columns exactly.
     Power Automate should map SP column values to these fields with no renaming.
+
+    toEmails / ccEmails / bccEmails are optional — include them from the triggering
+    email so LexAI can immediately add those users as watchers on ticket creation.
     """
     requestId: str = Field(..., description="SharePoint Requests List → RequestID")
     subject: str = Field(..., description="SharePoint Requests List → Subject")
     conversationId: Optional[str] = Field(None, description="SharePoint Requests List → ConversationID")
     entity: Optional[str] = Field(None, description="SharePoint Requests List → Entity")
+
+    # Optional: recipient fields from the email that triggered this request.
+    # Pipe-separated email addresses. Used to auto-add LexAI users as watchers.
+    toEmails: Optional[str] = Field(None, description="Pipe-separated To addresses from the triggering email")
+    ccEmails: Optional[str] = Field(None, description="Pipe-separated CC addresses")
+    bccEmails: Optional[str] = Field(None, description="Pipe-separated BCC addresses")
 
     @field_validator("requestId", "subject", mode="before")
     @classmethod

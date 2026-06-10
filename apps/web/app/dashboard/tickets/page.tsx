@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuthStore } from "@/lib/stores/auth-store";
 import { api } from "@/lib/api";
+import { RelativeTime, formatRelative } from "@/lib/relative-time";
 
 /* ─────────────────────────────────────────
    Types
@@ -20,31 +21,30 @@ type TicketSummary = {
   created_at: string;
 };
 
+
 /* ─────────────────────────────────────────
    Search scoring — multi-field fuzzy rank
 ───────────────────────────────────────── */
 function scoreMatch(ticket: TicketSummary, query: string): number {
   if (!query) return 1;
   const q = query.toLowerCase().trim();
-  const title   = (ticket.title || "").toLowerCase();
-  const num     = (ticket.ticket_number || "").toLowerCase();
-  const entity  = (ticket.entity || "").toLowerCase();
-  const status  = (ticket.status || "").toLowerCase();
+  const title  = (ticket.title || "").toLowerCase();
+  const num    = (ticket.ticket_number || "").toLowerCase();
+  const entity = (ticket.entity || "").toLowerCase();
+  const status = (ticket.status || "").toLowerCase();
 
-  if (title === q || num === q)     return 100;
-  if (num.startsWith(q))            return 90;
-  if (title.startsWith(q))          return 80;
-  if (title.includes(q))            return 65;
-  if (num.includes(q))              return 55;
-  if (entity.includes(q))           return 45;
-  if (status.includes(q))           return 35;
+  if (title === q || num === q) return 100;
+  if (num.startsWith(q))        return 90;
+  if (title.startsWith(q))      return 80;
+  if (title.includes(q))        return 65;
+  if (num.includes(q))          return 55;
+  if (entity.includes(q))       return 45;
+  if (status.includes(q))       return 35;
 
-  // Word-level match
   const words = q.split(/\s+/).filter(Boolean);
   const matched = words.filter(w => title.includes(w) || num.includes(w));
   if (matched.length === words.length) return 70;
   if (matched.length > 0) return 25 + (matched.length / words.length) * 20;
-
   return 0;
 }
 
@@ -55,21 +55,6 @@ function filterAndSort(tickets: TicketSummary[], query: string): TicketSummary[]
     .filter(({ score }) => score > 0)
     .sort((a, b) => b.score - a.score)
     .map(({ t }) => t);
-}
-
-/* ─────────────────────────────────────────
-   Helpers
-───────────────────────────────────────── */
-function relativeTime(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1)   return "just now";
-  if (mins < 60)  return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24)   return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  if (days < 30)  return `${days}d ago`;
-  return new Date(iso).toLocaleDateString();
 }
 
 function Highlight({ text, query }: { text: string; query: string }) {
@@ -260,7 +245,7 @@ function TicketCard({ ticket, query = "", selected = false }: { ticket: TicketSu
             <span className={`tkt-pill ${ticket.status}`}>{ticket.status.replace("_", " ")}</span>
             <span className={`tkt-pill ${ticket.priority}`}>{ticket.priority}</span>
           </div>
-          <span className="tkt-card-time">{relativeTime(ticket.updated_at)}</span>
+          <RelativeTime iso={ticket.updated_at} className="tkt-card-time" />
         </div>
       </div>
       {/* Chevron */}

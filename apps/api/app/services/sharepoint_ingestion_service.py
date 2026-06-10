@@ -72,6 +72,49 @@ async def _get_admin_fallback(session: AsyncSession) -> User:
     return admin
 
 
+async def _sync_watchers_from_emails(
+    session: AsyncSession,
+    ticket_id: str,
+    email_fields: list,
+) -> None:
+    """
+    For every pipe-separated email address in *email_fields*, if there is a
+    matching active LexAI User, insert a TicketUser(role='watcher') row.
+
+    Idempotent: skips addresses already in ticket_users for this ticket.
+    Unique-constraint-safe: relies on the DB-level uq_ticket_users_ticket_user
+    constraint as a final backstop, so concurrent calls are also safe.
+    """
+    for field_val in email_fields:
+        if not field_val:
+            continue
+        for raw_email in field_val.split("|"):
+            addr = raw_email.strip().lower()
+            if not addr:
+                continue
+            # Look up LexAI user by email (case-insensitive, already lowered)
+            u_result = await session.exec(select(User).where(User.email == addr))
+            found_user = u_result.first()
+            if not found_user:
+                continue
+            # Check if already a participant for this ticket
+            tu_result = await session.exec(
+                select(TicketUser).where(
+                    TicketUser.ticket_id == ticket_id,
+                    TicketUser.user_id == found_user.id,
+                )
+            )
+            if tu_result.first():
+                continue   # already present, skip
+            tu = TicketUser(ticket_id=ticket_id, user_id=found_user.id, role="watcher")
+            session.add(tu)
+            log.info(
+                "[SharePoint] Auto-added %s as watcher on ticket %s (from to/cc/bcc)",
+                addr, ticket_id,
+            )
+    await session.commit()
+
+
 # ─── process_request ─────────────────────────────────────────────────────────
 
 async def process_request(session: AsyncSession, payload: dict) -> Ticket:
@@ -84,6 +127,9 @@ async def process_request(session: AsyncSession, payload: dict) -> Ticket:
       conversationId  → Ticket.conversation_id
       entity          → Ticket.entity
 
+    Optional email-recipient fields (pipe-separated):
+      toEmails, ccEmails, bccEmails  → auto-add matching LexAI users as watchers
+
     Returns the created or updated Ticket.
     Raises ValueError when requestId or subject are missing.
     """
@@ -91,6 +137,9 @@ async def process_request(session: AsyncSession, payload: dict) -> Ticket:
     subject: str = (payload.get("subject") or "No Subject").strip()
     conversation_id: Optional[str] = payload.get("conversationId") or None
     entity: Optional[str] = payload.get("entity") or None
+    to_emails: Optional[str] = payload.get("toEmails") or None
+    cc_emails: Optional[str] = payload.get("ccEmails") or None
+    bcc_emails: Optional[str] = payload.get("bccEmails") or None
 
     if not request_id:
         raise ValueError("requestId is required and must not be blank.")
@@ -132,6 +181,13 @@ async def process_request(session: AsyncSession, payload: dict) -> Ticket:
 
     await session.commit()
     await session.refresh(ticket)
+
+    # ── Auto-sync watchers from To / CC / BCC ─────────────────────────────────
+    # Any LexAI user found in these fields is automatically added as a watcher
+    # so the ticket appears under their "Involved In" tab.
+    # This runs on both creates and updates so late-added participants are caught.
+    await _sync_watchers_from_emails(session, ticket.id, [to_emails, cc_emails, bcc_emails])
+
     return ticket
 
 
@@ -256,37 +312,7 @@ async def process_event(session: AsyncSession, payload: dict) -> Optional[Messag
     await session.refresh(msg)
 
     # ── Auto-sync watchers from To / CC / BCC ─────────────────────────────────
-    # Any LexAI user found in these fields is automatically added as a watcher
-    # so the ticket appears under their "Involved In" tab.
-    email_fields = [to_emails, cc_emails, bcc_emails]
-    for field_val in email_fields:
-        if not field_val:
-            continue
-        for raw_email in field_val.split("|"):
-            addr = raw_email.strip().lower()
-            if not addr:
-                continue
-            u_result = await session.exec(select(User).where(User.email == addr))
-            found_user = u_result.first()
-            if not found_user:
-                continue
-            # Idempotent: only insert if not already a participant
-            tu_result = await session.exec(
-                select(TicketUser).where(
-                    TicketUser.ticket_id == ticket.id,
-                    TicketUser.user_id == found_user.id,
-                )
-            )
-            if not tu_result.first():
-                tu = TicketUser(ticket_id=ticket.id, user_id=found_user.id, role="watcher")
-                session.add(tu)
-                log.info(
-                    "[SharePoint] Auto-added %s as watcher on ticket %s (from to/cc/bcc)",
-                    addr, ticket.id,
-                )
-
-    # Persist the new watcher rows (separate commit to keep message commit clean)
-    await session.commit()
+    await _sync_watchers_from_emails(session, ticket.id, [to_emails, cc_emails, bcc_emails])
 
     log.info(
         "[SharePoint] Appended message to ticket %s (request_id=%s, event_id=%s)",

@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuthStore } from "@/lib/stores/auth-store";
 import { api } from "@/lib/api";
+import { RelativeTime, formatRelative, formatAbsolute } from "@/lib/relative-time";
 
 /* ═══════════════════════════════════════════════
    Types
@@ -68,25 +69,7 @@ type TicketDetails = {
 
 type MentionUser = { id: string; full_name: string; email: string };
 
-/* ═══════════════════════════════════════════════
-   Helpers
-═══════════════════════════════════════════════ */
-function relativeTime(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1)  return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24)  return `${hrs}h ago`;
-  return new Date(iso).toLocaleDateString();
-}
 
-function fmtTimestamp(iso: string): string {
-  return new Date(iso).toLocaleString([], {
-    month: "short", day: "numeric",
-    hour: "2-digit", minute: "2-digit",
-  });
-}
 
 function splitPipe(val?: string): string[] {
   if (!val) return [];
@@ -218,7 +201,7 @@ function TicketListPanel({
                   <div className="tkt-card-pills">
                     <span className={`tkt-pill ${t.status}`}>{t.status.replace("_"," ")}</span>
                   </div>
-                  <span className="tkt-card-time">{relativeTime(t.updated_at)}</span>
+                  <RelativeTime iso={t.updated_at} className="tkt-card-time" />
                 </div>
               </div>
             </Link>
@@ -286,7 +269,7 @@ function EventCard({ msg, currentUserId }: { msg: MessageDetail; currentUserId: 
         </div>
 
         <div className="tkt-event-hdr-r">
-          <span className="tkt-event-time">{fmtTimestamp(msg.timestamp)}</span>
+          <span className="tkt-event-time">{formatAbsolute(msg.timestamp)}</span>
           <svg className={`tkt-event-chevron ${open ? "open" : ""}`} width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="m6 9 6 6 6-6"/>
           </svg>
@@ -469,7 +452,7 @@ function InternalChat({
                 return (
                   <div key={m.id} className={`tkt-chat-msg ${isMe ? "mine" : "theirs"}`}>
                     <div className="tkt-chat-meta">
-                      {isMe ? "You" : m.sender_name} · {fmtTimestamp(m.timestamp)}
+                      {isMe ? "You" : m.sender_name} · {formatAbsolute(m.timestamp)}
                     </div>
                     <div className={`tkt-bubble ${isMe ? "mine" : "theirs"}`}>
                       {m.content}
@@ -560,6 +543,11 @@ export default function TicketDetailPage() {
     fetchTicket();
   };
 
+  const handlePriorityChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    await api.patch(`/tickets/${id}`, { priority: e.target.value });
+    fetchTicket();
+  };
+
   const handleAssign = async (e: React.ChangeEvent<HTMLSelectElement>) => {
     const uid = e.target.value;
     if (!uid) return;
@@ -634,12 +622,30 @@ export default function TicketDetailPage() {
             </div>
 
             <div className="tkt-detail-hdr-right">
-              {/* Status selector (admin only changes status, others view) */}
+              {/* Priority selector — admin + reviewer can change, others see pill */}
+              {isAdmin ? (
+                <select
+                  className="tkt-status-sel"
+                  value={ticket.priority}
+                  onChange={handlePriorityChange}
+                  title="Priority"
+                >
+                  <option value="low">🟢 Low</option>
+                  <option value="medium">🟡 Medium</option>
+                  <option value="high">🔴 High</option>
+                  <option value="urgent">🚨 Urgent</option>
+                </select>
+              ) : (
+                <span className={`tkt-pill ${ticket.priority}`}>{ticket.priority}</span>
+              )}
+
+              {/* Status selector */}
               {isAdmin ? (
                 <select
                   className="tkt-status-sel"
                   value={ticket.status}
                   onChange={handleStatusChange}
+                  title="Status"
                 >
                   <option value="open">Open</option>
                   <option value="in_progress">In Progress</option>
@@ -676,11 +682,11 @@ export default function TicketDetailPage() {
                 )}
                 <div className="tkt-info-row">
                   <span className="tkt-info-k">Created</span>
-                  <span className="tkt-info-v">{new Date(ticket.created_at).toLocaleDateString()}</span>
+                  <span className="tkt-info-v">{formatAbsolute(ticket.created_at)}</span>
                 </div>
                 <div className="tkt-info-row">
                   <span className="tkt-info-k">Updated</span>
-                  <span className="tkt-info-v">{relativeTime(ticket.updated_at)}</span>
+                  <RelativeTime iso={ticket.updated_at} className="tkt-info-v" />
                 </div>
                 <div className="tkt-info-row">
                   <span className="tkt-info-k">Emails</span>
