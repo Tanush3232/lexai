@@ -83,50 +83,95 @@ async def _sync_watchers_from_emails(
     exclude_emails: Optional[list] = None,
 ) -> None:
     """
-    For every semicolon-separated (or pipe-separated) email address in
-    *email_fields*, if there is a matching active LexAI User, insert a
-    TicketUser(role='watcher') row.
+    For every email address found in *email_fields*, if there is a matching
+    active LexAI User, ensure a TicketUser(role='watcher') row exists.
 
-    SharePoint sends addresses as semicolons: "a@x.com;b@y.com"
-    We also accept pipe-separated for backward compatibility.
+    Separator handling:
+      - SharePoint sends semicolons:  "a@x.com;b@y.com"
+      - Accepts pipes for compatibility: "a@x.com|b@y.com"
+      - Handles display-name format:  "John Doe <john@x.com>"
 
-    exclude_emails: list of lowercase addresses to skip (e.g. the system
-    mailbox that receives everything but is not a real participant).
+    Case-insensitive: DB lookup uses func.lower() on both sides.
 
-    Idempotent: skips addresses already in ticket_users for this ticket.
+    exclude_emails: list of addresses to skip (e.g. system mailbox).
+
+    Idempotent & collision-safe:
+      - Pre-checks existing rows before inserting.
+      - Each insert is committed individually with its own error handling so
+        a UniqueViolationError on one address NEVER rolls back the others.
     """
-    skip_set = {e.lower().strip() for e in (exclude_emails or [])}
+    import re
+    _EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 
+    # Build skip set — only non-empty, lowercased
+    skip_set = {e.lower().strip() for e in (exclude_emails or []) if e and e.strip()}
+
+    # ── Collect all distinct, valid addresses from every field ────────────────
+    all_addresses = set()
     for field_val in email_fields:
         if not field_val:
             continue
-        # Normalise separators: treat both ; and | as delimiters
+        # Normalise separators: both ; and | treated as delimiters
         normalised = field_val.replace("|", ";")
-        for raw_email in normalised.split(";"):
-            addr = raw_email.strip().lower()
-            if not addr or addr in skip_set:
+        for segment in normalised.split(";"):
+            segment = segment.strip()
+            if not segment:
                 continue
-            # Case-insensitive lookup — func.lower() on DB side, addr already lowercased
-            u_result = await session.exec(select(User).where(func.lower(User.email) == addr))
-            found_user = u_result.first()
-            if not found_user:
-                continue
-            # Check if already a participant for this ticket
-            tu_result = await session.exec(
-                select(TicketUser).where(
-                    TicketUser.ticket_id == ticket_id,
-                    TicketUser.user_id == found_user.id,
-                )
-            )
-            if tu_result.first():
-                continue   # already present, skip
+            # Extract email from potential display-name format "Name <email>"
+            match = _EMAIL_RE.search(segment)
+            if match:
+                all_addresses.add(match.group(0).lower())
+            else:
+                # Bare email (no angle brackets)
+                addr = segment.lower()
+                if "@" in addr:
+                    all_addresses.add(addr)
+
+    # Remove skipped addresses
+    all_addresses -= skip_set
+
+    if not all_addresses:
+        return
+
+    # ── Fetch all existing watcher rows for this ticket in ONE query ──────────
+    existing_result = await session.exec(
+        select(TicketUser).where(TicketUser.ticket_id == ticket_id)
+    )
+    existing_user_ids: set[str] = {tu.user_id for tu in existing_result.all()}
+
+    # ── Resolve each address and insert watchers ──────────────────────────────
+    for addr in all_addresses:
+        # Case-insensitive user lookup
+        u_result = await session.exec(
+            select(User).where(func.lower(User.email) == addr)
+        )
+        found_user = u_result.first()
+        if not found_user:
+            log.debug("[SharePoint] No LexAI user for email %r — skipping watcher add", addr)
+            continue
+
+        if found_user.id in existing_user_ids:
+            log.debug("[SharePoint] User %s already a participant on ticket %s — skip", addr, ticket_id)
+            continue
+
+        # Insert individual row — catch UniqueViolation per-row so one
+        # collision never rolls back other addresses in this batch.
+        try:
             tu = TicketUser(ticket_id=ticket_id, user_id=found_user.id, role="watcher")
             session.add(tu)
+            await session.commit()
+            existing_user_ids.add(found_user.id)   # update in-memory set
             log.info(
-                "[SharePoint] Auto-added %s as watcher on ticket %s (from to/cc/bcc)",
-                addr, ticket_id,
+                "[SharePoint] Auto-added %s (user_id=%s) as watcher on ticket %s",
+                addr, found_user.id, ticket_id,
             )
-    await session.commit()
+        except Exception as exc:
+            # Most likely a UniqueViolation from a concurrent request — safe to ignore
+            await session.rollback()
+            log.warning(
+                "[SharePoint] Could not add %s as watcher on ticket %s (likely duplicate): %s",
+                addr, ticket_id, exc,
+            )
 
 
 

@@ -248,3 +248,83 @@ async def append_attachment(
     except Exception as exc:
         log.error("[SharePoint] /attachment failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail="Internal Server Error")
+
+
+# ─── Debug: watcher-sync dry-run ──────────────────────────────────────────────
+# POST /api/v1/sharepoint/debug/watcher-sync
+# Protected by the same X-SharePoint-Token header.
+# Use this to verify that email addresses from SharePoint resolve correctly to
+# LexAI users WITHOUT making any DB changes.
+
+class WatcherDebugPayload(BaseModel):
+    toEmails: Optional[str] = None
+    ccEmails: Optional[str] = None
+    bccEmails: Optional[str] = None
+
+@router.post(
+    "/debug/watcher-sync",
+    summary="[DEBUG] Dry-run watcher-sync — shows which emails match LexAI users",
+    dependencies=[Depends(verify_sharepoint_secret)],
+)
+async def debug_watcher_sync(
+    payload: WatcherDebugPayload,
+    session: AsyncSession = Depends(get_session),
+):
+    """
+    Dry-run only — no DB writes.
+    Returns for each address: whether a LexAI user was found and their ID.
+    Use this to diagnose case-sensitivity or separator issues before real data flows in.
+    """
+    import re
+    from sqlalchemy import func as _func
+    from sqlmodel import select as _select
+    from app.models.user import User as _User
+
+    _EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+
+    email_fields = [
+        ("toEmails",  payload.toEmails),
+        ("ccEmails",  payload.ccEmails),
+        ("bccEmails", payload.bccEmails),
+    ]
+    results = []
+
+    for field_label, field_val in email_fields:
+        if not field_val:
+            continue
+        normalised = field_val.replace("|", ";")
+        for segment in normalised.split(";"):
+            segment = segment.strip()
+            if not segment:
+                continue
+
+            raw_addr = segment
+            m = _EMAIL_RE.search(segment)
+            extracted = m.group(0).lower() if m else (segment.lower() if "@" in segment else None)
+
+            if not extracted:
+                results.append({
+                    "field": field_label, "raw": raw_addr,
+                    "extracted": None, "matched_user": None,
+                    "reason": "not a valid email address",
+                })
+                continue
+
+            stmt = _select(_User).where(_func.lower(_User.email) == extracted)
+            u_result = await session.exec(stmt)
+            user = u_result.first()
+
+            results.append({
+                "field": field_label,
+                "raw": raw_addr,
+                "extracted": extracted,
+                "matched_user": {
+                    "id": user.id,
+                    "email": user.email,
+                    "name": user.full_name,
+                } if user else None,
+                "reason": "✅ matched" if user else "❌ no LexAI user with this email",
+            })
+
+    return {"dry_run": True, "total_addresses": len(results), "results": results}
+
