@@ -198,9 +198,11 @@ async def process_request(session: AsyncSession, payload: dict) -> Ticket:
     subject: str = (payload.get("subject") or "No Subject").strip()
     conversation_id: Optional[str] = payload.get("conversationId") or None
     entity: Optional[str] = payload.get("entity") or None
-    to_emails: Optional[str] = payload.get("toEmails") or None
-    cc_emails: Optional[str] = payload.get("ccEmails") or None
-    bcc_emails: Optional[str] = payload.get("bccEmails") or None
+    # SP column names are PascalCase: ToEmails, CCEmails, BccEmails
+    # Try PascalCase first (SharePoint native), fall back to camelCase
+    to_emails: Optional[str]  = payload.get("ToEmails")  or payload.get("toEmails")  or None
+    cc_emails: Optional[str]  = payload.get("CCEmails")  or payload.get("ccEmails")  or None
+    bcc_emails: Optional[str] = payload.get("BccEmails") or payload.get("bccEmails") or None
 
     if not request_id:
         raise ValueError("requestId is required and must not be blank.")
@@ -298,9 +300,11 @@ async def process_event(session: AsyncSession, payload: dict) -> Optional[Messag
     has_attachment: Optional[bool] = payload.get("hasAttachment")
     attachment_names: Optional[str] = payload.get("attachmentNames") or None
     attachment_links: Optional[str] = payload.get("attachmentLinks") or None
-    to_emails: Optional[str] = payload.get("toEmails") or None
-    cc_emails: Optional[str] = payload.get("ccEmails") or None
-    bcc_emails: Optional[str] = payload.get("bccEmails") or None
+    # SP column names are PascalCase: ToEmails, CCEmails, BccEmails
+    # Try PascalCase first (SharePoint native), fall back to camelCase
+    to_emails: Optional[str]  = payload.get("ToEmails")  or payload.get("toEmails")  or None
+    cc_emails: Optional[str]  = payload.get("CCEmails")  or payload.get("ccEmails")  or None
+    bcc_emails: Optional[str] = payload.get("BccEmails") or payload.get("bccEmails") or None
 
     # ── Resolve Ticket ────────────────────────────────────────────────────────
     result = await session.exec(select(Ticket).where(Ticket.request_id == request_id))
