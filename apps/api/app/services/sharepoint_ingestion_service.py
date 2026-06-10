@@ -1,11 +1,23 @@
 """
 sharepoint_ingestion_service.py — Legal Ticketing System
 
-Service for ingesting tickets, events, and attachments from SharePoint via Power Automate webhooks.
+Handles all database writes from Power Automate webhook payloads.
+
+Three public coroutines:
+  process_request    → UPSERT Ticket from SharePoint Requests List
+  process_event      → INSERT Message from SharePoint Events List
+  process_attachment → UPSERT Attachment from SharePoint LegalAttachments Library
+
+Design principles:
+  - Idempotent: repeated webhook calls with same IDs produce no duplicates.
+  - Non-lossy: if the sender email does not map to a LexAI user we fall back
+    to a super_admin account so that no conversation is silently dropped.
+  - All SharePoint column values are persisted verbatim so the frontend can
+    render them without further API calls.
 """
 import logging
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -13,154 +25,358 @@ from sqlmodel import select
 from app.models.ticket import Ticket, Attachment
 from app.models.message import Message
 from app.models.user import User
+from app.models.ticket import TicketUser
 
 log = logging.getLogger(__name__)
 
+
+# ─── Helpers ─────────────────────────────────────────────────────────────────
+
+def _parse_iso(ts: Optional[str]) -> Optional[datetime]:
+    """
+    Parse an ISO-8601 timestamp string into a naive UTC datetime.
+    Returns None silently if ts is blank or unparseable.
+    """
+    if not ts:
+        return None
+    try:
+        # Replace Z suffix so fromisoformat works on Python < 3.11
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        # Normalise to naive UTC for DB storage
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    except (ValueError, AttributeError):
+        log.warning("[SharePoint] Could not parse timestamp %r — falling back to utcnow()", ts)
+        return None
+
+
+async def _resolve_user(session: AsyncSession, email: Optional[str]) -> Optional[User]:
+    """
+    Attempt to resolve an email address to a LexAI User row.
+    Returns None if not found; callers decide the fallback strategy.
+    """
+    if not email:
+        return None
+    result = await session.exec(select(User).where(User.email == email.lower().strip()))
+    return result.first()
+
+
+async def _get_admin_fallback(session: AsyncSession) -> User:
+    """
+    Return the first active super_admin as a last-resort sender.
+    Raises ValueError when the database has no super_admin (mis-configured deployment).
+    """
+    result = await session.exec(select(User).where(User.role == "super_admin"))
+    admin = result.first()
+    if not admin:
+        raise ValueError("No super_admin user found — cannot ingest event without a valid sender.")
+    return admin
+
+
+# ─── process_request ─────────────────────────────────────────────────────────
+
 async def process_request(session: AsyncSession, payload: dict) -> Ticket:
     """
-    Process a Request payload from SharePoint.
-    UPSERT logic based on request_id.
+    UPSERT a Ticket from a SharePoint Requests List payload.
+
+    SharePoint columns consumed:
+      requestId       → Ticket.request_id    (unique UPSERT key)
+      subject         → Ticket.title
+      conversationId  → Ticket.conversation_id
+      entity          → Ticket.entity
+
+    Returns the created or updated Ticket.
+    Raises ValueError when requestId or subject are missing.
     """
-    request_id = payload.get("requestId")
-    subject = payload.get("subject", "No Subject")
-    # conversation_id = payload.get("conversationId")
-    # entity = payload.get("entity")
+    request_id: Optional[str] = payload.get("requestId", "").strip() or None
+    subject: str = (payload.get("subject") or "No Subject").strip()
+    conversation_id: Optional[str] = payload.get("conversationId") or None
+    entity: Optional[str] = payload.get("entity") or None
 
     if not request_id:
-        raise ValueError("requestId is required")
+        raise ValueError("requestId is required and must not be blank.")
+    if not subject:
+        raise ValueError("subject is required and must not be blank.")
 
-    # Check if exists
-    existing = await session.exec(select(Ticket).where(Ticket.request_id == request_id))
-    ticket = existing.first()
+    # Try to find an existing ticket keyed on request_id
+    result = await session.exec(select(Ticket).where(Ticket.request_id == request_id))
+    ticket = result.first()
 
     if ticket:
-        # Update existing
-        ticket.title = subject
-        log.info(f"[SharePoint] Updated Ticket for request_id={request_id}")
+        # ── Update existing ──────────────────────────────────────────────────
+        changed = False
+        if ticket.title != subject:
+            ticket.title = subject
+            changed = True
+        if conversation_id and ticket.conversation_id != conversation_id:
+            ticket.conversation_id = conversation_id
+            changed = True
+        if entity and ticket.entity != entity:
+            ticket.entity = entity
+            changed = True
+        if changed:
+            ticket.updated_at = datetime.utcnow()
+            session.add(ticket)
+        log.info("[SharePoint] Updated Ticket %s (request_id=%s)", ticket.id, request_id)
     else:
-        # Create new
+        # ── Create new ───────────────────────────────────────────────────────
         ticket = Ticket(
             title=subject,
             request_id=request_id,
+            conversation_id=conversation_id,
+            entity=entity,
             status="open",
-            priority="medium"
+            priority="medium",
         )
         session.add(ticket)
-        log.info(f"[SharePoint] Created Ticket for request_id={request_id}")
+        log.info("[SharePoint] Created Ticket (request_id=%s)", request_id)
 
     await session.commit()
     await session.refresh(ticket)
     return ticket
 
 
+# ─── process_event ───────────────────────────────────────────────────────────
+
 async def process_event(session: AsyncSession, payload: dict) -> Optional[Message]:
     """
-    Process an Event payload from SharePoint (appends a message).
+    INSERT a Message from a SharePoint Events List payload.
+
+    SharePoint columns consumed:
+      requestId        → resolves to ticket_id via Ticket.request_id
+      eventId          → Message.event_id            (SP Events row ID)
+      messageId        → Message.message_id           (Outlook message ID)
+      timestamp        → Message.timestamp
+      sender           → Message.sender_email + resolved to Message.sender_id
+      body             → Message.content
+      direction        → Message.direction
+      hasAttachment    → Message.has_attachment
+      attachmentNames  → Message.attachment_names
+      attachmentLinks  → Message.attachment_links
+      toEmails         → Message.to_emails
+      ccEmails         → Message.cc_emails
+      bccEmails        → Message.bcc_emails
+
+    Idempotency:
+      1. If eventId is provided, an exact eventId match blocks duplicate inserts.
+      2. Otherwise falls back to content + ticket_id + source deduplication.
+
+    Returns the Message (existing if duplicate, newly created otherwise).
+    Raises ValueError if the parent Ticket cannot be resolved.
     """
-    request_id = payload.get("requestId")
-    sender_email = payload.get("sender", "").lower()
-    body = payload.get("body", "")
-    timestamp_str = payload.get("timestamp")
-
+    request_id: Optional[str] = (payload.get("requestId") or "").strip() or None
     if not request_id:
-        raise ValueError("requestId is required")
+        raise ValueError("requestId is required.")
 
-    # Find ticket
-    existing = await session.exec(select(Ticket).where(Ticket.request_id == request_id))
-    ticket = existing.first()
+    event_id: Optional[str] = payload.get("eventId") or None
+    message_id: Optional[str] = payload.get("messageId") or None
+    sender_email: str = (payload.get("sender") or "").lower().strip()
+    body: str = (payload.get("body") or "").strip()
+    timestamp_str: Optional[str] = payload.get("timestamp")
+    direction: Optional[str] = payload.get("direction") or None
+    has_attachment: Optional[bool] = payload.get("hasAttachment")
+    attachment_names: Optional[str] = payload.get("attachmentNames") or None
+    attachment_links: Optional[str] = payload.get("attachmentLinks") or None
+    to_emails: Optional[str] = payload.get("toEmails") or None
+    cc_emails: Optional[str] = payload.get("ccEmails") or None
+    bcc_emails: Optional[str] = payload.get("bccEmails") or None
+
+    # ── Resolve Ticket ────────────────────────────────────────────────────────
+    result = await session.exec(select(Ticket).where(Ticket.request_id == request_id))
+    ticket = result.first()
     if not ticket:
-        log.error(f"[SharePoint] Cannot append event, Ticket not found for request_id={request_id}")
-        raise ValueError(f"Ticket not found for request_id={request_id}")
+        log.error("[SharePoint] Cannot append event — Ticket not found (request_id=%s)", request_id)
+        raise ValueError(f"Ticket not found for requestId={request_id!r}. Create the Request first.")
 
-    # Resolve user
-    user = None
-    if sender_email:
-        user_result = await session.exec(select(User).where(User.email == sender_email))
-        user = user_result.first()
-
-    if not user:
-        # We need a user ID for the foreign key. Fall back to super_admin or log error.
-        admin_result = await session.exec(select(User).where(User.role == "super_admin"))
-        user = admin_result.first()
-        if not user:
-            log.error(f"[SharePoint] No user found for {sender_email} and no super_admin fallback.")
-            raise ValueError(f"User not found for sender={sender_email}")
-        log.warning(f"[SharePoint] Sender {sender_email} not found, falling back to admin user {user.email}")
-
-    # Parse timestamp if available, else use current
-    timestamp = datetime.utcnow()
-    if timestamp_str:
-        try:
-            timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00")).replace(tzinfo=None)
-        except ValueError:
-            pass
-
-    # Simple duplicate protection: Check if message with same content and timestamp exists
-    existing_msg = await session.exec(
-        select(Message).where(
-            Message.ticket_id == ticket.id,
-            Message.content == body,
-            Message.source == "sharepoint"
+    # ── Idempotency guard ─────────────────────────────────────────────────────
+    if event_id:
+        dup_result = await session.exec(
+            select(Message).where(
+                Message.ticket_id == ticket.id,
+                Message.event_id == event_id,
+            )
         )
-    )
-    if existing_msg.first():
-        log.info(f"[SharePoint] Duplicate event dropped for request_id={request_id}")
-        return existing_msg.first()
+        duplicate = dup_result.first()
+        if duplicate:
+            log.info(
+                "[SharePoint] Duplicate event dropped (ticket_id=%s, event_id=%s)",
+                ticket.id, event_id,
+            )
+            return duplicate
+    else:
+        # Content-level dedup when eventId is absent
+        dup_result = await session.exec(
+            select(Message).where(
+                Message.ticket_id == ticket.id,
+                Message.content == body,
+                Message.source == "sharepoint",
+            )
+        )
+        duplicate = dup_result.first()
+        if duplicate:
+            log.info("[SharePoint] Duplicate event dropped by content (ticket_id=%s)", ticket.id)
+            return duplicate
 
+    # ── Resolve Sender ────────────────────────────────────────────────────────
+    user = await _resolve_user(session, sender_email)
+    if not user:
+        user = await _get_admin_fallback(session)
+        log.warning(
+            "[SharePoint] Sender %r not found in LexAI — falling back to admin %s",
+            sender_email, user.email,
+        )
+
+    # ── Parse Timestamp ───────────────────────────────────────────────────────
+    timestamp = _parse_iso(timestamp_str) or datetime.utcnow()
+
+    # ── Insert Message ────────────────────────────────────────────────────────
     msg = Message(
         ticket_id=ticket.id,
         sender_id=user.id,
-        content=body,
+        sender_email=sender_email or None,
         source="sharepoint",
-        timestamp=timestamp
+        content=body,
+        timestamp=timestamp,
+        event_id=event_id,
+        message_id=message_id,
+        direction=direction,
+        has_attachment=has_attachment,
+        attachment_names=attachment_names,
+        attachment_links=attachment_links,
+        to_emails=to_emails,
+        cc_emails=cc_emails,
+        bcc_emails=bcc_emails,
     )
     session.add(msg)
+
+    # Bump ticket updated_at so list views refresh ordering
+    ticket.updated_at = datetime.utcnow()
+    session.add(ticket)
+
     await session.commit()
     await session.refresh(msg)
-    
-    log.info(f"[SharePoint] Appended event to ticket {ticket.id} (request_id={request_id})")
+
+    # ── Auto-sync watchers from To / CC / BCC ─────────────────────────────────
+    # Any LexAI user found in these fields is automatically added as a watcher
+    # so the ticket appears under their "Involved In" tab.
+    email_fields = [to_emails, cc_emails, bcc_emails]
+    for field_val in email_fields:
+        if not field_val:
+            continue
+        for raw_email in field_val.split("|"):
+            addr = raw_email.strip().lower()
+            if not addr:
+                continue
+            u_result = await session.exec(select(User).where(User.email == addr))
+            found_user = u_result.first()
+            if not found_user:
+                continue
+            # Idempotent: only insert if not already a participant
+            tu_result = await session.exec(
+                select(TicketUser).where(
+                    TicketUser.ticket_id == ticket.id,
+                    TicketUser.user_id == found_user.id,
+                )
+            )
+            if not tu_result.first():
+                tu = TicketUser(ticket_id=ticket.id, user_id=found_user.id, role="watcher")
+                session.add(tu)
+                log.info(
+                    "[SharePoint] Auto-added %s as watcher on ticket %s (from to/cc/bcc)",
+                    addr, ticket.id,
+                )
+
+    # Persist the new watcher rows (separate commit to keep message commit clean)
+    await session.commit()
+
+    log.info(
+        "[SharePoint] Appended message to ticket %s (request_id=%s, event_id=%s)",
+        ticket.id, request_id, event_id,
+    )
     return msg
 
 
+# ─── process_attachment ───────────────────────────────────────────────────────
+
 async def process_attachment(session: AsyncSession, payload: dict) -> Attachment:
     """
-    Process an Attachment payload from SharePoint.
+    UPSERT an Attachment from a SharePoint LegalAttachments Library payload.
+
+    SharePoint columns consumed:
+      requestId    → resolves to ticket_id via Ticket.request_id
+      fileName     → Attachment.file_name   (SP 'Name' column)
+      fileUrl      → Attachment.file_url    (direct SP link)
+      eventId      → Attachment.event_id    (SP LegalAttachments → EventID)
+      documentId   → Attachment.document_id (SP LegalAttachments → DocumentID)
+      entity       → Attachment.entity
+      modifiedBy   → Attachment.modified_by (SP 'Modified By' display name)
+      spModifiedAt → Attachment.sp_modified_at (SP 'Modified' timestamp)
+
+    Idempotency keyed on (ticket_id, file_url).
+    Returns the Attachment (existing if duplicate, newly created otherwise).
+    Raises ValueError when required fields are missing or the parent Ticket
+    cannot be resolved.
     """
-    request_id = payload.get("requestId")
-    file_name = payload.get("fileName")
-    file_url = payload.get("fileUrl")
-    entity = payload.get("entity")
+    request_id: Optional[str] = (payload.get("requestId") or "").strip() or None
+    file_name: Optional[str] = (payload.get("fileName") or "").strip() or None
+    file_url: Optional[str] = (payload.get("fileUrl") or "").strip() or None
 
-    if not request_id or not file_name or not file_url:
-        raise ValueError("requestId, fileName, and fileUrl are required")
+    if not request_id:
+        raise ValueError("requestId is required.")
+    if not file_name:
+        raise ValueError("fileName is required.")
+    if not file_url:
+        raise ValueError("fileUrl is required.")
 
-    # Find ticket
-    existing = await session.exec(select(Ticket).where(Ticket.request_id == request_id))
-    ticket = existing.first()
+    event_id: Optional[str] = payload.get("eventId") or None
+    document_id: Optional[str] = payload.get("documentId") or None
+    entity: Optional[str] = payload.get("entity") or None
+    modified_by: Optional[str] = payload.get("modifiedBy") or None
+    sp_modified_at: Optional[datetime] = _parse_iso(payload.get("spModifiedAt"))
+
+    # ── Resolve Ticket ────────────────────────────────────────────────────────
+    result = await session.exec(select(Ticket).where(Ticket.request_id == request_id))
+    ticket = result.first()
     if not ticket:
-        log.error(f"[SharePoint] Cannot attach file, Ticket not found for request_id={request_id}")
-        raise ValueError(f"Ticket not found for request_id={request_id}")
+        log.error("[SharePoint] Cannot attach file — Ticket not found (request_id=%s)", request_id)
+        raise ValueError(f"Ticket not found for requestId={request_id!r}. Create the Request first.")
 
-    # Idempotent check (same file_url)
-    existing_att = await session.exec(
+    # ── Idempotency guard (keyed on file_url) ─────────────────────────────────
+    dup_result = await session.exec(
         select(Attachment).where(
             Attachment.ticket_id == ticket.id,
-            Attachment.file_url == file_url
+            Attachment.file_url == file_url,
         )
     )
-    if existing_att.first():
-        log.info(f"[SharePoint] Duplicate attachment dropped for request_id={request_id}")
-        return existing_att.first()
+    existing_att = dup_result.first()
+    if existing_att:
+        log.info(
+            "[SharePoint] Duplicate attachment dropped (ticket_id=%s, file_url=%s)",
+            ticket.id, file_url,
+        )
+        return existing_att
 
+    # ── Insert Attachment ─────────────────────────────────────────────────────
     att = Attachment(
         ticket_id=ticket.id,
+        request_id=request_id,
         file_name=file_name,
         file_url=file_url,
-        entity=entity
+        event_id=event_id,
+        document_id=document_id,
+        entity=entity,
+        modified_by=modified_by,
+        sp_modified_at=sp_modified_at,
     )
     session.add(att)
+
+    # Bump ticket updated_at
+    ticket.updated_at = datetime.utcnow()
+    session.add(ticket)
+
     await session.commit()
     await session.refresh(att)
-
-    log.info(f"[SharePoint] Attached {file_name} to ticket {ticket.id} (request_id={request_id})")
+    log.info(
+        "[SharePoint] Attached %r to ticket %s (request_id=%s, document_id=%s)",
+        file_name, ticket.id, request_id, document_id,
+    )
     return att

@@ -1,109 +1,274 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuthStore } from "@/lib/stores/auth-store";
 import { api } from "@/lib/api";
 
-type Ticket = {
+/* ─────────────────────────────────────────
+   Types
+───────────────────────────────────────── */
+type TicketSummary = {
   id: string;
+  ticket_number: string;   // "TKT-0001"
   title: string;
   status: string;
   priority: string;
+  entity?: string;
   updated_at: string;
+  created_at: string;
 };
 
+/* ─────────────────────────────────────────
+   Search scoring — multi-field fuzzy rank
+───────────────────────────────────────── */
+function scoreMatch(ticket: TicketSummary, query: string): number {
+  if (!query) return 1;
+  const q = query.toLowerCase().trim();
+  const title   = (ticket.title || "").toLowerCase();
+  const num     = (ticket.ticket_number || "").toLowerCase();
+  const entity  = (ticket.entity || "").toLowerCase();
+  const status  = (ticket.status || "").toLowerCase();
+
+  if (title === q || num === q)     return 100;
+  if (num.startsWith(q))            return 90;
+  if (title.startsWith(q))          return 80;
+  if (title.includes(q))            return 65;
+  if (num.includes(q))              return 55;
+  if (entity.includes(q))           return 45;
+  if (status.includes(q))           return 35;
+
+  // Word-level match
+  const words = q.split(/\s+/).filter(Boolean);
+  const matched = words.filter(w => title.includes(w) || num.includes(w));
+  if (matched.length === words.length) return 70;
+  if (matched.length > 0) return 25 + (matched.length / words.length) * 20;
+
+  return 0;
+}
+
+function filterAndSort(tickets: TicketSummary[], query: string): TicketSummary[] {
+  if (!query.trim()) return tickets;
+  return tickets
+    .map(t => ({ t, score: scoreMatch(t, query) }))
+    .filter(({ score }) => score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map(({ t }) => t);
+}
+
+/* ─────────────────────────────────────────
+   Helpers
+───────────────────────────────────────── */
+function relativeTime(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1)   return "just now";
+  if (mins < 60)  return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24)   return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 30)  return `${days}d ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
+function Highlight({ text, query }: { text: string; query: string }) {
+  if (!query.trim()) return <>{text}</>;
+  const idx = text.toLowerCase().indexOf(query.toLowerCase());
+  if (idx === -1) return <>{text}</>;
+  return (
+    <>
+      {text.slice(0, idx)}
+      <mark className="tkt-highlight">{text.slice(idx, idx + query.length)}</mark>
+      {text.slice(idx + query.length)}
+    </>
+  );
+}
+
+function SkeletonCard() {
+  return (
+    <div className="tkt-skeleton">
+      <div className="tkt-skel-line" style={{ width: "30%" }} />
+      <div className="tkt-skel-line" style={{ width: "70%" }} />
+      <div className="tkt-skel-line" style={{ width: "50%" }} />
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────
+   Main Page
+───────────────────────────────────────── */
 export default function TicketsPage() {
   const { user } = useAuthStore();
-  const [tickets, setTickets] = useState<Ticket[]>([]);
-  const [view, setView] = useState("all");
+  const [tickets, setTickets] = useState<TicketSummary[]>([]);
+  const [view, setView]       = useState("all");
   const [loading, setLoading] = useState(true);
+  const [search, setSearch]   = useState("");
+  const searchRef             = useRef<HTMLInputElement>(null);
 
+  const isAdmin = user ? ["ops_admin", "super_admin", "reviewer"].includes(user.role) : false;
+
+  // Force non-admins to "involved" view
   useEffect(() => {
-    // Force view to 'involved' if user is not admin/reviewer
-    if (user && !["ops_admin", "super_admin", "reviewer"].includes(user.role) && view === "all") {
-      setView("involved");
+    if (user && !isAdmin && view === "all") setView("involved");
+  }, [user, isAdmin]);
+
+  const fetchTickets = useCallback(async (v: string) => {
+    setLoading(true);
+    try {
+      const res = await api.get(`/tickets?view=${v}&limit=200`);
+      setTickets(res.data);
+    } catch {
+      setTickets([]);
+    } finally {
+      setLoading(false);
     }
-  }, [user, view]);
+  }, []);
 
-  useEffect(() => {
-    async function fetchTickets() {
-      try {
-        setLoading(true);
-        const res = await api.get(`/tickets?view=${view}`);
-        setTickets(res.data);
-      } catch (err) {
-        console.error("Failed to load tickets", err);
-      } finally {
-        setLoading(false);
-      }
-    }
-    fetchTickets();
-  }, [view]);
+  useEffect(() => { fetchTickets(view); }, [view]);
 
-  if (!user) return null;
+  const displayed = filterAndSort(tickets, search);
 
-  const isAdmin = ["ops_admin", "super_admin", "reviewer"].includes(user.role);
+  const tabCounts = {
+    all:      tickets.length,
+    assigned: tickets.length, // counts are approximate without re-fetching per tab
+    involved: tickets.length,
+  };
+
+  const tabs = [
+    ...(isAdmin ? [{ key: "all",      label: "All Tickets" }] : []),
+    { key: "assigned", label: "Assigned to Me" },
+    { key: "involved", label: "Involved In"    },
+  ];
 
   return (
-    <div className="tickets-container" style={{ padding: "20px", maxWidth: "1200px", margin: "0 auto" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
-        <h1 style={{ fontSize: "24px", fontWeight: "600", color: "#1e293b" }}>Legal Tickets</h1>
-        <div style={{ fontSize: "14px", color: "#64748b" }}>Tickets can only be created by sending an email to app.info@adventz.com with [TICKET] in the subject.</div>
-      </div>
+    <div className="tkt-fullbleed">
+      <div className="tkt-list-page">
 
-      <div style={{ display: "flex", gap: "10px", marginBottom: "20px", borderBottom: "1px solid #e2e8f0" }}>
-        {isAdmin && (
-          <button 
-            onClick={() => setView("all")}
-            style={{ padding: "10px 20px", borderBottom: view === "all" ? "2px solid #2563eb" : "none", color: view === "all" ? "#2563eb" : "#64748b", background: "none", borderTop: "none", borderLeft: "none", borderRight: "none", cursor: "pointer", fontWeight: view === "all" ? "600" : "400" }}
-          >
-            All Tickets
-          </button>
-        )}
-        <button 
-          onClick={() => setView("assigned")}
-          style={{ padding: "10px 20px", borderBottom: view === "assigned" ? "2px solid #2563eb" : "none", color: view === "assigned" ? "#2563eb" : "#64748b", background: "none", borderTop: "none", borderLeft: "none", borderRight: "none", cursor: "pointer", fontWeight: view === "assigned" ? "600" : "400" }}
-        >
-          Assigned to Me
-        </button>
-        <button 
-          onClick={() => setView("involved")}
-          style={{ padding: "10px 20px", borderBottom: view === "involved" ? "2px solid #2563eb" : "none", color: view === "involved" ? "#2563eb" : "#64748b", background: "none", borderTop: "none", borderLeft: "none", borderRight: "none", cursor: "pointer", fontWeight: view === "involved" ? "600" : "400" }}
-        >
-          Involved In
-        </button>
-      </div>
+        {/* ── Header ─────────────────────────────────────── */}
+        <div className="tkt-list-header">
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+            <div>
+              <h1>Legal Requests</h1>
+              <p>Tickets are created via the SharePoint + Power Automate pipeline · Read-only from SharePoint, internal notes via the chat panel</p>
+            </div>
+            <div className="tkt-synced" style={{ marginTop: 4 }}>
+              <div className="tkt-synced-dot" />
+              SharePoint Sync
+            </div>
+          </div>
 
-      {loading ? (
-        <div style={{ textAlign: "center", padding: "40px", color: "#64748b" }}>Loading tickets...</div>
-      ) : tickets.length === 0 ? (
-        <div style={{ textAlign: "center", padding: "40px", backgroundColor: "#f8fafc", borderRadius: "8px", border: "1px dashed #cbd5e1", color: "#64748b" }}>
-          No tickets found for this view.
+          {/* Search */}
+          <div className="tkt-search-wrap">
+            <svg className="tkt-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+            </svg>
+            <input
+              ref={searchRef}
+              id="tkt-search"
+              className="tkt-search-input"
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search tickets by subject, number, entity…"
+              autoComplete="off"
+            />
+            {search && (
+              <button className="tkt-search-clear" onClick={() => { setSearch(""); searchRef.current?.focus(); }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                  <path d="M18 6 6 18M6 6l12 12"/>
+                </svg>
+              </button>
+            )}
+          </div>
         </div>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-          {tickets.map(ticket => (
-            <Link href={`/dashboard/tickets/${ticket.id}`} key={ticket.id} style={{ textDecoration: "none" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "15px 20px", backgroundColor: "white", borderRadius: "8px", border: "1px solid #e2e8f0", boxShadow: "0 1px 2px rgba(0,0,0,0.05)", transition: "all 0.2s" }}>
-                <div>
-                  <h3 style={{ margin: "0 0 5px 0", color: "#0f172a", fontSize: "16px", fontWeight: "600" }}>{ticket.title}</h3>
-                  <div style={{ fontSize: "12px", color: "#64748b" }}>Updated: {new Date(ticket.updated_at).toLocaleString()}</div>
-                </div>
-                <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
-                  <span style={{ padding: "4px 8px", borderRadius: "4px", fontSize: "12px", fontWeight: "500", backgroundColor: ticket.priority === "high" || ticket.priority === "urgent" ? "#fee2e2" : "#f1f5f9", color: ticket.priority === "high" || ticket.priority === "urgent" ? "#ef4444" : "#64748b" }}>
-                    {ticket.priority.toUpperCase()}
-                  </span>
-                  <span style={{ padding: "4px 8px", borderRadius: "4px", fontSize: "12px", fontWeight: "500", backgroundColor: ticket.status === "open" ? "#dcfce7" : ticket.status === "in_progress" ? "#fef9c3" : "#f1f5f9", color: ticket.status === "open" ? "#166534" : ticket.status === "in_progress" ? "#854d0e" : "#475569" }}>
-                    {ticket.status.toUpperCase()}
-                  </span>
-                </div>
-              </div>
-            </Link>
+
+        {/* ── Tabs ───────────────────────────────────────── */}
+        <div className="tkt-tabs">
+          {tabs.map(tab => (
+            <button
+              key={tab.key}
+              className={`tkt-tab ${view === tab.key ? "active" : ""}`}
+              onClick={() => { setView(tab.key); setSearch(""); }}
+            >
+              {tab.label}
+              {view === tab.key && !loading && (
+                <span className="tkt-tab-count">{displayed.length}</span>
+              )}
+            </button>
           ))}
         </div>
-      )}
+
+        {/* ── List body ──────────────────────────────────── */}
+        <div className="tkt-list-body">
+          {loading ? (
+            <>
+              <SkeletonCard /><SkeletonCard /><SkeletonCard /><SkeletonCard />
+            </>
+          ) : displayed.length === 0 ? (
+            <div className="tkt-empty">
+              <div className="tkt-empty-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/>
+                  <path d="M14 2v4a2 2 0 0 0 2 2h4"/>
+                  <path d="m9 15 2 2 4-4"/>
+                </svg>
+              </div>
+              {search ? (
+                <>
+                  <p>No tickets match &ldquo;<strong>{search}</strong>&rdquo;</p>
+                  <span>Try a different search term or clear the filter.</span>
+                </>
+              ) : (
+                <>
+                  <p>No tickets in this view.</p>
+                  <span>Tickets arrive automatically via the SharePoint pipeline.</span>
+                </>
+              )}
+            </div>
+          ) : (
+            <>
+              <div className="tkt-list-count">{displayed.length} ticket{displayed.length !== 1 ? "s" : ""}</div>
+              {displayed.map(ticket => (
+                <TicketCard key={ticket.id} ticket={ticket} query={search} />
+              ))}
+            </>
+          )}
+        </div>
+
+      </div>
     </div>
+  );
+}
+
+/* ─────────────────────────────────────────
+   TicketCard
+───────────────────────────────────────── */
+function TicketCard({ ticket, query = "", selected = false }: { ticket: TicketSummary; query?: string; selected?: boolean }) {
+  return (
+    <Link href={`/dashboard/tickets/${ticket.id}`} className={`tkt-card ${selected ? "selected" : ""}`}>
+      <div className="tkt-card-body">
+        <div className="tkt-card-top">
+          <span className="tkt-card-num">{ticket.ticket_number}</span>
+          {ticket.entity && <span className="tkt-pill entity">{ticket.entity}</span>}
+        </div>
+        <div className="tkt-card-title">
+          <Highlight text={ticket.title} query={query} />
+        </div>
+        <div className="tkt-card-footer">
+          <div className="tkt-card-pills">
+            <span className={`tkt-pill ${ticket.status}`}>{ticket.status.replace("_", " ")}</span>
+            <span className={`tkt-pill ${ticket.priority}`}>{ticket.priority}</span>
+          </div>
+          <span className="tkt-card-time">{relativeTime(ticket.updated_at)}</span>
+        </div>
+      </div>
+      {/* Chevron */}
+      <div style={{ display: "flex", alignItems: "center", flexShrink: 0, color: "var(--text3)" }}>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="m9 18 6-6-6-6"/>
+        </svg>
+      </div>
+    </Link>
   );
 }

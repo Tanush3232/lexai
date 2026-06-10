@@ -1,14 +1,23 @@
 """
-Legal Ticketing System — Ticket, TicketUser, EmailThread, EmailLog models
+Legal Ticketing System — Ticket, TicketUser, EmailThread, EmailLog, Attachment models
 
 Ticket        → central entity for each legal support request
 TicketUser    → many-to-many: user ↔ ticket with a role (creator|assignee|watcher)
 EmailThread   → maps an external Outlook conversation ID to a ticket
 EmailLog      → audit trail for every email event on a ticket
+Attachment    → file attached to a ticket, sourced from SharePoint LegalAttachments library
+
+SharePoint column mapping:
+  Requests List   → Ticket    (RequestID, ConversationID, Entity, Subject)
+  Events List     → Message   (EventID, MessageID, Sender, Timestamp, Body, Direction,
+                                HasAttachment, AttachmentNames, AttachmentLinks,
+                                ToEmails, CCEmails, BccEmails)
+  LegalAttachments→ Attachment (RequestID, EventID, DocumentID, Entity, Name,
+                                Modified, Modified By)
 """
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 from sqlmodel import SQLModel, Field
 from sqlalchemy import Text, Column, UniqueConstraint
 
@@ -17,9 +26,22 @@ from sqlalchemy import Text, Column, UniqueConstraint
 
 class TicketBase(SQLModel):
     title: str
-    status: str = Field(default="open")     # open | in_progress | closed
-    priority: str = Field(default="medium")  # low | medium | high | urgent
-    request_id: Optional[str] = Field(default=None, index=True, unique=True, description="External SharePoint RequestID")
+    status: str = Field(default="open")      # open | in_progress | closed
+    priority: str = Field(default="medium")   # low | medium | high | urgent
+
+    # ── SharePoint Requests List columns ──────────────────────────────────────
+    request_id: Optional[str] = Field(
+        default=None, index=True, unique=True,
+        description="SharePoint Requests List → RequestID (e.g. REQ-45)"
+    )
+    conversation_id: Optional[str] = Field(
+        default=None, index=True,
+        description="SharePoint Requests List → ConversationID (Outlook thread)"
+    )
+    entity: Optional[str] = Field(
+        default=None,
+        description="SharePoint Requests List → Entity (e.g. INPUT / OUTPUT / ZIL)"
+    )
 
 
 class Ticket(TicketBase, table=True):
@@ -57,7 +79,6 @@ class TicketUser(SQLModel, table=True):
     user_id: str = Field(foreign_key="users.id", index=True)
     role: str  # creator | assignee | watcher
     assigned_at: datetime = Field(default_factory=datetime.utcnow)
-
 
 
 class TicketUserRead(SQLModel):
@@ -117,20 +138,55 @@ class EmailLogRead(SQLModel):
 
 
 # ─── Attachment ───────────────────────────────────────────────────────────────
+# Maps to SharePoint LegalAttachments document library columns:
+#   Name, Modified, ModifiedBy, RequestID, EventID, DocumentID, Entity
 
 class AttachmentBase(SQLModel):
+    # Foreign keys
     ticket_id: str = Field(foreign_key="tickets.id", index=True)
-    file_name: str
-    file_url: str
-    entity: Optional[str] = Field(default=None)
+
+    # ── SharePoint LegalAttachments Library columns ────────────────────────────
+    file_name: str = Field(
+        description="SharePoint LegalAttachments → Name (filename with extension)"
+    )
+    file_url: str = Field(
+        description="SharePoint direct link to the document"
+    )
+    request_id: Optional[str] = Field(
+        default=None, index=True,
+        description="SharePoint LegalAttachments → RequestID (links to Requests List)"
+    )
+    event_id: Optional[str] = Field(
+        default=None, index=True,
+        description="SharePoint LegalAttachments → EventID (links to Events List row)"
+    )
+    document_id: Optional[str] = Field(
+        default=None,
+        description="SharePoint LegalAttachments → DocumentID (unique doc identifier)"
+    )
+    entity: Optional[str] = Field(
+        default=None,
+        description="SharePoint LegalAttachments → Entity (e.g. INPUT / ZIL)"
+    )
+    modified_by: Optional[str] = Field(
+        default=None,
+        description="SharePoint LegalAttachments → Modified By (uploader display name)"
+    )
+
 
 class Attachment(AttachmentBase, table=True):
     __tablename__ = "attachments"
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    # 'modified' tracks the last SharePoint-side modification timestamp
+    sp_modified_at: Optional[datetime] = Field(
+        default=None,
+        description="SharePoint LegalAttachments → Modified (last modified timestamp from SP)"
+    )
+
 
 class AttachmentRead(AttachmentBase):
     id: str
     created_at: datetime
-
+    sp_modified_at: Optional[datetime]

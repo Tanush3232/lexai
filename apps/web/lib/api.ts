@@ -458,6 +458,40 @@ export const usersApi = {
   delete: (id: string) => api.delete(`/users/${id}`),
 };
 
+// Tickets
+export const ticketsApi = {
+  /** List tickets. view: "all" | "assigned" | "involved" */
+  list: (params: {
+    view?: string;
+    search?: string;
+    status?: string;
+    priority?: string;
+    limit?: number;
+  } = {}) => api.get("/tickets", { params: { view: "all", limit: 200, ...params } }),
+
+  /** Full ticket details with messages + participants + attachments */
+  get: (id: string) => api.get(`/tickets/${id}`),
+
+  /** Partial update — status, priority */
+  update: (id: string, data: { status?: string; priority?: string }) =>
+    api.patch(`/tickets/${id}`, data),
+
+  /** Assign a user to the ticket */
+  assign: (id: string, userId: string) =>
+    api.post(`/tickets/${id}/assign`, { user_id: userId }),
+
+  /** Post an internal note from the app UI */
+  postMessage: (id: string, content: string) =>
+    api.post(`/tickets/${id}/messages`, { content }),
+
+  /** @mention a user — adds them as watcher and sends notification */
+  mention: (id: string, userId: string) =>
+    api.post(`/tickets/${id}/mentions`, { user_id: userId }),
+
+  /** All active LexAI users (used for @mention autocomplete + assign dropdown) */
+  mentionableUsers: (id: string) => api.get(`/tickets/${id}/mentionable_users`),
+};
+
 // Web Search
 export type SearchMode = "fast" | "pro" | "deep";
 

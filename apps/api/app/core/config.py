@@ -87,19 +87,19 @@ class Settings(BaseSettings):
     EMAIL_USER: str = ""
     EMAIL_PASS: str = ""
 
-    # ── Microsoft Graph API (Webhook / Ingestion) ─────────────────────────────
-    # Used to register change-notification subscriptions on the shared mailbox.
-    # Grant: Mail.Read (Application) on the Azure app registration.
+    # ── Microsoft Graph API (Webhook / Ingestion) ──────────────────────────
+    # Retained for backward compatibility; no longer used for active ingestion.
     GRAPH_TENANT_ID: str = ""        # Azure AD tenant ID
     GRAPH_CLIENT_ID: str = ""        # App (client) ID
     GRAPH_CLIENT_SECRET: str = ""    # Client secret value
-    # The mailbox being watched (same as EMAIL_USER in most setups)
     GRAPH_MAILBOX: str = ""          # e.g. app.info@adventz.com
-    # Public HTTPS URL Alembic will call back to — must be reachable by Microsoft
     GRAPH_WEBHOOK_URL: str = ""      # e.g. https://api.yourdomain.com/api/v1/webhooks/graph
-    # Shared secret Microsoft sends in every notification for authenticity check
     GRAPH_WEBHOOK_SECRET: str = "lexai-webhook-secret"
-    # SharePoint / Power Automate webhook secret (sent as X-SharePoint-Token header)
+
+    # ── SharePoint + Power Automate Ingestion ─────────────────────────────
+    # Shared secret that Power Automate sends in X-SharePoint-Token header.
+    # Set a long random string here and provide the same value in Power Automate.
+    # If not set, falls back to GRAPH_WEBHOOK_SECRET for backward compatibility.
     SHAREPOINT_WEBHOOK_SECRET: str = ""  # Set in .env — if empty, falls back to GRAPH_WEBHOOK_SECRET
     # If True, uses the EMAIL_USER and EMAIL_PASS to get a Delegated token (avoids Admin Consent)
     GRAPH_USE_DELEGATED_AUTH: bool = True

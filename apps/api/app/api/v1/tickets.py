@@ -38,14 +38,15 @@ class MentionBody(BaseModel):
 @router.get("")
 async def get_tickets_route(
     view: str = Query("all", description="all, assigned, involved"),
+    search: Optional[str] = Query(None, description="Case-insensitive title search"),
     status: Optional[str] = None,
     priority: Optional[str] = None,
     skip: int = 0,
-    limit: int = 50,
+    limit: int = 100,
     session: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ):
-    tickets = await list_tickets(session, current_user, view, status, priority, skip, limit)
+    tickets = await list_tickets(session, current_user, view, status, priority, search, skip, limit)
     return tickets
 
 @router.get("/{ticket_id}")
