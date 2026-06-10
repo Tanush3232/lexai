@@ -26,6 +26,7 @@ from app.models.ticket import Ticket, Attachment
 from app.models.message import Message
 from app.models.user import User
 from app.models.ticket import TicketUser
+from app.core.config import settings
 
 log = logging.getLogger(__name__)
 
@@ -76,23 +77,33 @@ async def _sync_watchers_from_emails(
     session: AsyncSession,
     ticket_id: str,
     email_fields: list,
+    exclude_emails: Optional[list] = None,
 ) -> None:
     """
-    For every pipe-separated email address in *email_fields*, if there is a
-    matching active LexAI User, insert a TicketUser(role='watcher') row.
+    For every semicolon-separated (or pipe-separated) email address in
+    *email_fields*, if there is a matching active LexAI User, insert a
+    TicketUser(role='watcher') row.
+
+    SharePoint sends addresses as semicolons: "a@x.com;b@y.com"
+    We also accept pipe-separated for backward compatibility.
+
+    exclude_emails: list of lowercase addresses to skip (e.g. the system
+    mailbox that receives everything but is not a real participant).
 
     Idempotent: skips addresses already in ticket_users for this ticket.
-    Unique-constraint-safe: relies on the DB-level uq_ticket_users_ticket_user
-    constraint as a final backstop, so concurrent calls are also safe.
     """
+    skip_set = {e.lower().strip() for e in (exclude_emails or [])}
+
     for field_val in email_fields:
         if not field_val:
             continue
-        for raw_email in field_val.split("|"):
+        # Normalise separators: treat both ; and | as delimiters
+        normalised = field_val.replace("|", ";")
+        for raw_email in normalised.split(";"):
             addr = raw_email.strip().lower()
-            if not addr:
+            if not addr or addr in skip_set:
                 continue
-            # Look up LexAI user by email (case-insensitive, already lowered)
+            # Look up LexAI user by email (already lowercased)
             u_result = await session.exec(select(User).where(User.email == addr))
             found_user = u_result.first()
             if not found_user:
@@ -115,6 +126,7 @@ async def _sync_watchers_from_emails(
     await session.commit()
 
 
+
 # ─── process_request ─────────────────────────────────────────────────────────
 
 async def process_request(session: AsyncSession, payload: dict) -> Ticket:
@@ -127,8 +139,9 @@ async def process_request(session: AsyncSession, payload: dict) -> Ticket:
       conversationId  → Ticket.conversation_id
       entity          → Ticket.entity
 
-    Optional email-recipient fields (pipe-separated):
+    Optional email-recipient fields (semicolon-separated, SharePoint format):
       toEmails, ccEmails, bccEmails  → auto-add matching LexAI users as watchers
+      The system mailbox (EMAIL_USER) is automatically excluded.
 
     Returns the created or updated Ticket.
     Raises ValueError when requestId or subject are missing.
@@ -185,8 +198,13 @@ async def process_request(session: AsyncSession, payload: dict) -> Ticket:
     # ── Auto-sync watchers from To / CC / BCC ─────────────────────────────────
     # Any LexAI user found in these fields is automatically added as a watcher
     # so the ticket appears under their "Involved In" tab.
-    # This runs on both creates and updates so late-added participants are caught.
-    await _sync_watchers_from_emails(session, ticket.id, [to_emails, cc_emails, bcc_emails])
+    # The system mailbox is excluded — it is not a real participant.
+    _system_email = [settings.EMAIL_USER] if settings.EMAIL_USER else []
+    await _sync_watchers_from_emails(
+        session, ticket.id,
+        [to_emails, cc_emails, bcc_emails],
+        exclude_emails=_system_email,
+    )
 
     return ticket
 
@@ -312,7 +330,12 @@ async def process_event(session: AsyncSession, payload: dict) -> Optional[Messag
     await session.refresh(msg)
 
     # ── Auto-sync watchers from To / CC / BCC ─────────────────────────────────
-    await _sync_watchers_from_emails(session, ticket.id, [to_emails, cc_emails, bcc_emails])
+    _system_email = [settings.EMAIL_USER] if settings.EMAIL_USER else []
+    await _sync_watchers_from_emails(
+        session, ticket.id,
+        [to_emails, cc_emails, bcc_emails],
+        exclude_emails=_system_email,
+    )
 
     log.info(
         "[SharePoint] Appended message to ticket %s (request_id=%s, event_id=%s)",

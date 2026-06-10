@@ -93,9 +93,9 @@ export default function TicketsPage() {
 
   const isAdmin = user ? ["ops_admin", "super_admin", "reviewer"].includes(user.role) : false;
 
-  // Force non-admins to "involved" view
+  // Admins default to "all", non-admins default to "assigned"
   useEffect(() => {
-    if (user && !isAdmin && view === "all") setView("involved");
+    if (user && !isAdmin && view === "all") setView("assigned");
   }, [user, isAdmin]);
 
   const fetchTickets = useCallback(async (v: string) => {
@@ -114,17 +114,14 @@ export default function TicketsPage() {
 
   const displayed = filterAndSort(tickets, search);
 
-  const tabCounts = {
-    all:      tickets.length,
-    assigned: tickets.length, // counts are approximate without re-fetching per tab
-    involved: tickets.length,
-  };
-
-  const tabs = [
-    ...(isAdmin ? [{ key: "all",      label: "All Tickets" }] : []),
-    { key: "assigned", label: "Assigned to Me" },
-    { key: "involved", label: "Involved In"    },
-  ];
+  // Tabs: admins see only "All Tickets" (all tickets are visible to them, no role split needed)
+  // Non-admins see "Assigned to Me" and "Involved In" separately
+  const tabs = isAdmin
+    ? [{ key: "all", label: "All Tickets" }]
+    : [
+        { key: "assigned", label: "Assigned to Me" },
+        { key: "involved", label: "Involved In"    },
+      ];
 
   return (
     <div className="tkt-fullbleed">
@@ -207,7 +204,13 @@ export default function TicketsPage() {
               ) : (
                 <>
                   <p>No tickets in this view.</p>
-                  <span>Tickets arrive automatically via the SharePoint pipeline.</span>
+                  <span>
+                    {view === "assigned"
+                      ? "Tickets assigned to you by an admin will appear here."
+                      : view === "involved"
+                      ? "Tickets where you were in To, CC, or BCC will appear here automatically."
+                      : "Tickets arrive automatically via the SharePoint pipeline."}
+                  </span>
                 </>
               )}
             </div>

@@ -184,20 +184,28 @@ async def list_tickets(
     query = select(Ticket)
 
     # ── Access control ────────────────────────────────────────────────────────
-    if not _is_admin(current_user):
-        # Must be in ticket_users
-        query = query.join(TicketUser, TicketUser.ticket_id == Ticket.id).where(
-            TicketUser.user_id == current_user.id
-        )
+    if _is_admin(current_user):
+        # Admins see ALL tickets — no tab separation needed, no join required
+        # (view param is intentionally ignored for admins)
+        pass
     else:
+        # Non-admins: must be in ticket_users. Split by role based on view.
         if view == "assigned":
+            # Tickets explicitly assigned to me by a boss/admin
             query = query.join(TicketUser, TicketUser.ticket_id == Ticket.id).where(
                 TicketUser.user_id == current_user.id,
                 TicketUser.role == "assignee",
             )
         elif view == "involved":
+            # Tickets I'm a watcher on (auto-added from to/cc/bcc via SharePoint)
             query = query.join(TicketUser, TicketUser.ticket_id == Ticket.id).where(
-                TicketUser.user_id == current_user.id
+                TicketUser.user_id == current_user.id,
+                TicketUser.role == "watcher",
+            )
+        else:
+            # "all" for non-admins = any participation (assignee OR watcher)
+            query = query.join(TicketUser, TicketUser.ticket_id == Ticket.id).where(
+                TicketUser.user_id == current_user.id,
             )
 
     # ── Filters ───────────────────────────────────────────────────────────────
@@ -206,7 +214,6 @@ async def list_tickets(
     if priority:
         query = query.where(Ticket.priority == priority)
     if search and search.strip():
-        # Server-side ILIKE search on title (catches all cases the client may miss)
         query = query.where(Ticket.title.ilike(f"%{search.strip()}%"))
 
     query = query.order_by(Ticket.updated_at.desc()).offset(skip).limit(limit)
