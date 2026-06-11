@@ -1,5 +1,5 @@
 "use client";
-import { useEffect } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
 import { useAuthStore } from "@/lib/stores/auth-store";
@@ -126,6 +126,28 @@ export default function DashboardLayout({
   const router = useRouter();
   const pathname = usePathname();
   const { user, token, logout, _hasHydrated } = useAuthStore();
+  const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  // Close mobile drawer on route change
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
+
+  // Close on Escape key
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMobileOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Lock body scroll when mobile drawer is open
+  useEffect(() => {
+    document.body.style.overflow = mobileOpen ? "hidden" : "";
+    return () => { document.body.style.overflow = ""; };
+  }, [mobileOpen]);
 
   useEffect(() => {
     if (_hasHydrated && !token) {
@@ -133,8 +155,8 @@ export default function DashboardLayout({
     }
   }, [_hasHydrated, token]);
 
-  if (!_hasHydrated) return null; // Show nothing or a skeleton until hydrated
-  if (!token) return null; // Protect during transition
+  if (!_hasHydrated) return null;
+  if (!token) return null;
 
   const handleLogout = () => {
     logout();
@@ -143,10 +165,142 @@ export default function DashboardLayout({
 
   const currentTitle = NAV_ITEMS.find(n => n.href !== "/dashboard" ? pathname.startsWith(n.href) : pathname === n.href)?.label || "Overview";
 
+  const allNavItems = [
+    ...NAV_ITEMS,
+    ...( ["ops_admin", "super_admin"].includes(user?.role || "") ? [{
+      href: "/dashboard/usage",
+      label: "Usage Analytics",
+      disabled: false,
+      roles: ["ops_admin", "super_admin"],
+      icon: (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+        </svg>
+      )
+    }] : [])
+  ];
+
+  // Shared nav content (used in both desktop sidebar and mobile drawer)
+  const NavContent = ({ onItemClick }: { onItemClick?: () => void }) => (
+    <>
+      <nav className="sidebar-nav">
+        {allNavItems.map((item) => {
+          if (user?.role && !(item as any).roles.includes(user.role)) return null;
+
+          const isActive = item.href === "/dashboard"
+            ? pathname === "/dashboard"
+            : pathname.startsWith(item.href);
+
+          const inner = (
+            <>
+              {item.icon}
+              <span className="nav-label">{item.label}</span>
+            </>
+          );
+
+          if (item.disabled) {
+            return (
+              <span
+                key={item.href}
+                className="nav-item disabled"
+                title={collapsed ? item.label : undefined}
+              >
+                {inner}
+              </span>
+            );
+          }
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`nav-item${isActive ? " active" : ""}`}
+              title={collapsed ? item.label : undefined}
+              onClick={onItemClick}
+            >
+              {inner}
+            </Link>
+          );
+        })}
+      </nav>
+
+      <div className="sidebar-footer">
+        <div className="user-card" title={collapsed ? (user?.full_name || "Admin User") : undefined}>
+          <div className="avatar">
+            {user?.full_name?.charAt(0).toUpperCase() || "A"}
+          </div>
+          <div className="user-info">
+            <strong>{user?.full_name || "Admin User"}</strong>
+            <span>{user?.email?.split("@")[0] || "ops.admin"}</span>
+          </div>
+        </div>
+        <button onClick={handleLogout} className="signout-btn" title={collapsed ? "Sign out" : undefined}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+          </svg>
+          <span className="nav-label">Sign out</span>
+        </button>
+      </div>
+    </>
+  );
+
   return (
     <div className="app-shell">
-      {/* Sidebar */}
-      <div className="sidebar">
+
+      {/* ── MOBILE DRAWER OVERLAY ── */}
+      {mobileOpen && (
+        <div
+          className="mobile-overlay"
+          onClick={() => setMobileOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
+      {/* ── MOBILE DRAWER ── */}
+      <div className={`mobile-drawer${mobileOpen ? " mobile-drawer-open" : ""}`} role="dialog" aria-modal="true" aria-label="Navigation">
+        <div className="mobile-drawer-header">
+          <div className="navbar-logo">
+            <div className="logo-mark">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 2L3 7v5c0 5.25 3.75 10.15 9 11.25C17.25 22.15 21 17.25 21 12V7z"/>
+                <path d="M9 12l2 2 4-4"/>
+              </svg>
+            </div>
+            <div className="logo-text">
+              <strong>LexAI</strong>
+              <span>Legal Ops</span>
+            </div>
+          </div>
+          <button className="mobile-drawer-close" onClick={() => setMobileOpen(false)} aria-label="Close menu">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+        <NavContent onItemClick={() => setMobileOpen(false)} />
+      </div>
+
+      {/* ── DESKTOP SIDEBAR ── */}
+      <div className={`sidebar${collapsed ? " sidebar-collapsed" : ""}`}>
+        {/* Collapse toggle — appears on sidebar hover */}
+        <button
+          className="sidebar-toggle"
+          onClick={() => setCollapsed(c => !c)}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          title={collapsed ? "Expand" : "Collapse"}
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className={`toggle-chevron${collapsed ? " toggle-chevron-collapsed" : ""}`}
+          >
+            <polyline points="15 18 9 12 15 6" />
+          </svg>
+        </button>
+
         <div className="sidebar-header">
           <div className="navbar-logo">
             <div className="logo-mark">
@@ -162,70 +316,7 @@ export default function DashboardLayout({
           </div>
         </div>
 
-        <nav className="sidebar-nav">
-          {NAV_ITEMS.map((item) => {
-            // RBAC: Check if current user role is allowed to see this item
-            if (user?.role && !(item as any).roles.includes(user.role)) {
-              return null;
-            }
-
-            const isActive = item.href === "/dashboard"
-              ? pathname === "/dashboard"
-              : pathname.startsWith(item.href);
-            
-            if (item.disabled) {
-              return (
-                <span
-                  key={item.href}
-                  className="nav-item disabled"
-                  title="Coming soon"
-                >
-                  {item.icon}
-                  {item.label}
-                </span>
-              );
-            }
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={`nav-item ${isActive ? "active" : ""}`}
-              >
-                {item.icon}
-                {item.label}
-              </Link>
-            );
-          })}
-          {["ops_admin", "super_admin"].includes(user?.role || "") && (
-            <Link
-              href="/dashboard/usage"
-              className={`nav-item ${pathname.startsWith("/dashboard/usage") ? "active" : ""}`}
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
-              </svg>
-              Usage Analytics
-            </Link>
-          )}
-        </nav>
-
-        <div className="sidebar-footer">
-          <div className="user-card">
-            <div className="avatar">
-              {user?.full_name?.charAt(0).toUpperCase() || "A"}
-            </div>
-            <div className="user-info">
-              <strong>{user?.full_name || "Admin User"}</strong>
-              <span>{user?.email?.split("@")[0] || "ops.admin"}</span>
-            </div>
-          </div>
-          <button onClick={handleLogout} className="signout-btn">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
-            </svg>
-            Sign out
-          </button>
-        </div>
+        <NavContent />
       </div>
 
       {/* Main Container */}
@@ -233,6 +324,28 @@ export default function DashboardLayout({
         {/* Top Navbar */}
         <div className="navbar">
           <div className="navbar-content">
+            {/* Mobile hamburger */}
+            <button
+              className="mobile-hamburger"
+              onClick={() => setMobileOpen(true)}
+              aria-label="Open navigation"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
+                <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+              </svg>
+            </button>
+
+            {/* Mobile logo (shown only on mobile) */}
+            <div className="mobile-navbar-logo">
+              <div className="logo-mark" style={{ width: "22px", height: "22px", borderRadius: "5px" }}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 2L3 7v5c0 5.25 3.75 10.15 9 11.25C17.25 22.15 21 17.25 21 12V7z"/>
+                  <path d="M9 12l2 2 4-4"/>
+                </svg>
+              </div>
+              <span className="mobile-navbar-brand">LexAI</span>
+            </div>
+
             <span className="navbar-title">{currentTitle}</span>
             <div className="navbar-actions">
               <div className="icon-btn">

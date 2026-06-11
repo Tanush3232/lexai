@@ -5,7 +5,7 @@ import { foldersApi, documentsApi, chatApi } from "@/lib/api";
 import { toast } from "sonner";
 import {
   Loader2, FileText, X, ChevronDown, CheckCircle,
-  Sparkles, Square, MessageSquare, Database,
+  Sparkles, Square, MessageSquare, Database, Plus, ArrowUp,
 } from "lucide-react";
 
 // ─────────────────────────────────────────────
@@ -90,7 +90,21 @@ export default function IntelligencePage() {
   const [selectedDocs, setSelectedDocs] = useState<DocItem[]>([]);
   const [selectedFolderIds, setSelectedFolderIds] = useState<string[]>([]);
   const [vaultOpen, setVaultOpen] = useState(false);
+  const [plusOpen, setPlusOpen] = useState(false);
   const [thinkingStep, setThinkingStep] = useState(0);
+  const plusRef = useRef<HTMLDivElement>(null);
+
+  // Close the + popover when clicking outside
+  useEffect(() => {
+    if (!plusOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (plusRef.current && !plusRef.current.contains(e.target as Node)) {
+        setPlusOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [plusOpen]);
 
   const abortedRef = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -207,7 +221,7 @@ export default function IntelligencePage() {
         />
       )}
 
-      <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 48px)", maxWidth: "960px", margin: "-20px auto -48px" }}>
+      <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 48px)", maxWidth: "1100px", margin: "-20px auto -48px" }}>
 
         {/* ── Messages / Welcome ── */}
         <div style={{ flex: 1, overflowY: messages.length === 0 ? "hidden" : "auto", padding: "20px 32px 16px" }}>
@@ -294,81 +308,263 @@ export default function IntelligencePage() {
           )}
         </div>
 
-        {/* ── Chat Input Box ── */}
-        <div style={{ padding: "0 32px 20px", flexShrink: 0 }}>
-          <div style={{ border: "1.5px solid var(--border)", borderRadius: "16px", background: "var(--white)", boxShadow: "0 4px 28px rgba(0,0,0,0.07)", overflow: "hidden" }}>
-            {hasContext && (
-              <div style={{ display: "flex", alignItems: "center", gap: "6px", padding: "10px 14px 0", overflowX: "auto", flexWrap: "nowrap" }}>
-                {selectedFolderIds.map(fid => (
-                  <span key={fid} style={{ display: "inline-flex", alignItems: "center", gap: "5px", background: "var(--accent-light)", color: "var(--accent)", borderRadius: "6px", padding: "3px 6px 3px 10px", fontSize: "11.5px", fontWeight: 600, flexShrink: 0, whiteSpace: "nowrap" }}>
-                    <Database size={11} /> {folderName(fid)}
-                    <button onClick={() => setSelectedFolderIds(p => p.filter(f => f !== fid))} disabled={sending} style={{ background: "none", border: "none", cursor: "pointer", padding: 0, lineHeight: 1, color: "var(--accent)", marginLeft: "2px" }}>
-                      <X size={11} />
-                    </button>
-                  </span>
-                ))}
-                {selectedDocs.map(doc => (
-                  <span key={doc.id} style={{ display: "inline-flex", alignItems: "center", gap: "5px", background: "var(--bg2)", color: "var(--text)", borderRadius: "6px", padding: "3px 6px 3px 10px", fontSize: "11.5px", fontWeight: 500, flexShrink: 0, whiteSpace: "nowrap" }}>
-                    <FileText size={11} style={{ color: "var(--text2)" }} /> {doc.name}
-                    <button onClick={() => setSelectedDocs(p => p.filter(d => d.id !== doc.id))} disabled={sending} style={{ background: "none", border: "none", cursor: "pointer", padding: 0, lineHeight: 1, color: "var(--text3)", marginLeft: "2px" }}>
-                      <X size={11} />
-                    </button>
-                  </span>
-                ))}
-              </div>
-            )}
+        {/* ── ChatGPT-style pill input bar ── */}
+        <div style={{ padding: "0 20px 20px", flexShrink: 0 }}>
 
+          {/* Context chips row (above box when vault selected) */}
+          {hasContext && (
+            <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px", flexWrap: "wrap" }}>
+              {selectedFolderIds.map(fid => (
+                <span key={fid} style={{ display: "inline-flex", alignItems: "center", gap: "5px", background: "var(--accent-light)", color: "var(--accent)", borderRadius: "20px", padding: "4px 10px 4px 10px", fontSize: "12px", fontWeight: 600, border: "1px solid rgba(79,70,229,0.2)" }}>
+                  <Database size={11} /> {folderName(fid)}
+                  <button onClick={() => setSelectedFolderIds(p => p.filter(f => f !== fid))} disabled={sending} style={{ background: "none", border: "none", cursor: "pointer", padding: 0, lineHeight: 1, color: "var(--accent)", display: "flex", alignItems: "center", marginLeft: "2px" }}>
+                    <X size={11} />
+                  </button>
+                </span>
+              ))}
+              {selectedDocs.map(doc => (
+                <span key={doc.id} style={{ display: "inline-flex", alignItems: "center", gap: "5px", background: "var(--bg2)", color: "var(--text)", borderRadius: "20px", padding: "4px 10px", fontSize: "12px", fontWeight: 500, border: "1px solid var(--border)" }}>
+                  <FileText size={11} style={{ color: "var(--text2)" }} /> {doc.name}
+                  <button onClick={() => setSelectedDocs(p => p.filter(d => d.id !== doc.id))} disabled={sending} style={{ background: "none", border: "none", cursor: "pointer", padding: 0, lineHeight: 1, color: "var(--text3)", display: "flex", alignItems: "center", marginLeft: "2px" }}>
+                    <X size={11} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* Pill bar */}
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            background: "var(--white)",
+            border: "1.5px solid var(--border)",
+            borderRadius: "28px",
+            padding: "8px 10px 8px 10px",
+            boxShadow: "0 4px 24px rgba(0,0,0,0.07), 0 1px 4px rgba(0,0,0,0.04)",
+            transition: "box-shadow 0.2s, border-color 0.2s",
+          }}>
+
+            {/* + button with popover */}
+            <div ref={plusRef} style={{ position: "relative", flexShrink: 0 }}>
+              <button
+                onClick={() => setPlusOpen(o => !o)}
+                disabled={sending}
+                title="Options"
+                style={{
+                  width: "34px",
+                  height: "34px",
+                  borderRadius: "50%",
+                  border: "1.5px solid var(--border)",
+                  background: plusOpen ? "var(--text)" : "var(--bg)",
+                  color: plusOpen ? "var(--white)" : "var(--text2)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  cursor: sending ? "default" : "pointer",
+                  transition: "all 0.18s",
+                  padding: 0,
+                  flexShrink: 0,
+                }}
+              >
+                <Plus size={16} style={{
+                  transition: "transform 0.25s cubic-bezier(0.4,0,0.2,1)",
+                  transform: plusOpen ? "rotate(45deg)" : "rotate(0deg)",
+                }} />
+                {/* Context badge on + button */}
+                {hasContext && !plusOpen && (
+                  <span style={{
+                    position: "absolute",
+                    top: "-3px",
+                    right: "-3px",
+                    width: "14px",
+                    height: "14px",
+                    borderRadius: "50%",
+                    background: "var(--accent)",
+                    color: "#fff",
+                    fontSize: "8px",
+                    fontWeight: 700,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    border: "1.5px solid var(--white)",
+                  }}>{contextCount}</span>
+                )}
+              </button>
+
+              {/* Popover menu */}
+              {plusOpen && (
+                <div style={{
+                  position: "absolute",
+                  bottom: "calc(100% + 10px)",
+                  left: "0",
+                  background: "var(--white)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "14px",
+                  boxShadow: "0 8px 32px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.06)",
+                  padding: "6px",
+                  minWidth: "180px",
+                  zIndex: 50,
+                  animation: "popoverIn 0.15s cubic-bezier(0.4,0,0.2,1) both",
+                }}>
+                  {/* Choose Vault */}
+                  <button
+                    onClick={() => { setVaultOpen(true); setPlusOpen(false); }}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "10px",
+                      width: "100%",
+                      padding: "9px 12px",
+                      borderRadius: "9px",
+                      border: "none",
+                      background: hasContext ? "var(--accent-light)" : "transparent",
+                      color: hasContext ? "var(--accent)" : "var(--text)",
+                      fontSize: "13px",
+                      fontWeight: 600,
+                      cursor: "pointer",
+                      textAlign: "left",
+                      transition: "background 0.12s",
+                    }}
+                    onMouseEnter={e => { if (!hasContext) (e.currentTarget as HTMLButtonElement).style.background = "var(--bg)"; }}
+                    onMouseLeave={e => { if (!hasContext) (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+                  >
+                    <span style={{ width: 28, height: 28, borderRadius: "8px", background: hasContext ? "rgba(79,70,229,0.12)" : "var(--bg2)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      <Database size={14} style={{ color: hasContext ? "var(--accent)" : "var(--text2)" }} />
+                    </span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: "13px", fontWeight: 600 }}>Choose Vault</div>
+                      <div style={{ fontSize: "11px", color: "var(--text3)", marginTop: "1px" }}>
+                        {hasContext ? `${contextCount} selected` : "Select documents"}
+                      </div>
+                    </div>
+                    {hasContext && (
+                      <span style={{ background: "var(--accent)", color: "#fff", borderRadius: "10px", padding: "1px 7px", fontSize: "10px", fontWeight: 700 }}>
+                        {contextCount}
+                      </span>
+                    )}
+                  </button>
+
+                  {/* Divider */}
+                  <div style={{ height: "1px", background: "var(--border)", margin: "4px 6px" }} />
+
+                  {/* Improve Prompt */}
+                  <button
+                    onClick={() => { improve(); setPlusOpen(false); }}
+                    disabled={!input.trim() || improving}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "10px",
+                      width: "100%",
+                      padding: "9px 12px",
+                      borderRadius: "9px",
+                      border: "none",
+                      background: "transparent",
+                      color: (!input.trim() || improving) ? "var(--text3)" : "var(--text)",
+                      fontSize: "13px",
+                      fontWeight: 600,
+                      cursor: (!input.trim() || improving) ? "default" : "pointer",
+                      textAlign: "left",
+                      opacity: (!input.trim() || improving) ? 0.5 : 1,
+                      transition: "background 0.12s",
+                    }}
+                    onMouseEnter={e => { if (input.trim() && !improving) (e.currentTarget as HTMLButtonElement).style.background = "var(--bg)"; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+                  >
+                    <span style={{ width: 28, height: 28, borderRadius: "8px", background: improving ? "var(--accent-light)" : "var(--bg2)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      {improving
+                        ? <Loader2 size={14} className="animate-spin" style={{ color: "var(--accent)" }} />
+                        : <Sparkles size={14} style={{ color: "var(--text2)" }} />
+                      }
+                    </span>
+                    <div>
+                      <div style={{ fontSize: "13px", fontWeight: 600 }}>Improve Prompt</div>
+                      <div style={{ fontSize: "11px", color: "var(--text3)", marginTop: "1px" }}>Rewrite with AI</div>
+                    </div>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Textarea */}
             <textarea
               ref={textareaRef}
               value={input}
               onChange={e => { setInput(e.target.value); autoResize(); }}
               onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }}
               disabled={sending}
-              placeholder="Ask anything about your legal documents… (Shift+Enter for new line)"
-              style={{ width: "100%", border: "none", outline: "none", resize: "none", padding: "18px 20px 10px", fontSize: "15px", lineHeight: "1.65", background: "transparent", color: "var(--text)", minHeight: "58px", maxHeight: "200px", boxSizing: "border-box", fontFamily: "inherit" }}
+              placeholder="Ask LexAI…"
+              style={{
+                flex: 1,
+                border: "none",
+                outline: "none",
+                resize: "none",
+                padding: "7px 4px",
+                fontSize: "15px",
+                lineHeight: "1.6",
+                background: "transparent",
+                color: "var(--text)",
+                minHeight: "34px",
+                maxHeight: "200px",
+                boxSizing: "border-box",
+                fontFamily: "inherit",
+              }}
             />
 
-            <div style={{ display: "flex", alignItems: "center", padding: "8px 12px 12px", gap: "6px" }}>
+            {/* Right: stop square (sending) OR send arrow (has text) */}
+            {sending ? (
               <button
-                onClick={() => setVaultOpen(true)}
-                disabled={sending}
-                style={{ display: "flex", alignItems: "center", gap: "6px", padding: "7px 13px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--bg)", fontSize: "12px", fontWeight: 600, color: "var(--text2)", cursor: sending ? "default" : "pointer", opacity: sending ? 0.6 : 1 }}
+                onClick={stop}
+                title="Stop"
+                style={{
+                  width: "34px",
+                  height: "34px",
+                  borderRadius: "50%",
+                  border: "none",
+                  background: "var(--text)",
+                  color: "var(--white)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  cursor: "pointer",
+                  flexShrink: 0,
+                  transition: "opacity 0.15s",
+                  padding: 0,
+                }}
               >
-                <Database size={13} /> Choose Vault
-                {hasContext && <span style={{ background: "var(--accent)", color: "#fff", borderRadius: "10px", padding: "1px 6px", fontSize: "9.5px", fontWeight: 700 }}>{contextCount}</span>}
+                <Square size={13} fill="currentColor" />
               </button>
-
+            ) : input.trim() ? (
               <button
-                onClick={improve}
-                disabled={sending || (!input.trim() && !improving)}
-                style={{ display: "flex", alignItems: "center", gap: "6px", padding: "7px 13px", borderRadius: "8px", border: "1px solid var(--border)", background: improving ? "var(--accent-light)" : "var(--bg)", fontSize: "12px", fontWeight: 600, color: improving ? "var(--accent)" : "var(--text2)", cursor: (sending || (!input.trim() && !improving)) ? "default" : "pointer", opacity: (!input.trim() && !improving) ? 0.45 : 1 }}
+                onClick={submit}
+                title="Send"
+                style={{
+                  width: "34px",
+                  height: "34px",
+                  borderRadius: "50%",
+                  border: "none",
+                  background: "linear-gradient(135deg, var(--accent) 0%, #6366f1 100%)",
+                  color: "#fff",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  cursor: "pointer",
+                  flexShrink: 0,
+                  boxShadow: "0 3px 12px rgba(79,70,229,0.35)",
+                  transition: "all 0.18s",
+                  animation: "popoverIn 0.18s cubic-bezier(0.4,0,0.2,1) both",
+                  padding: 0,
+                }}
               >
-                {improving ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-                {improving ? "Improving…" : "Improve"}
+                <ArrowUp size={17} strokeWidth={2.5} />
               </button>
-
-              <div style={{ flex: 1 }} />
-
-              {sending ? (
-                <button
-                  onClick={stop}
-                  style={{ display: "flex", alignItems: "center", gap: "6px", padding: "8px 18px", borderRadius: "10px", background: "#ef4444", color: "#fff", border: "none", fontSize: "13px", fontWeight: 700, cursor: "pointer" }}
-                >
-                  <Square size={13} /> Stop
-                </button>
-              ) : (
-                <button
-                  onClick={submit}
-                  disabled={!input.trim()}
-                  style={{ display: "flex", alignItems: "center", gap: "6px", padding: "8px 20px", borderRadius: "10px", background: input.trim() ? "var(--accent)" : "var(--border)", color: input.trim() ? "#fff" : "var(--text3)", border: "none", fontSize: "13px", fontWeight: 700, cursor: input.trim() ? "pointer" : "default", transition: "all 0.2s" }}
-                >
-                  Ask LexAI
-                </button>
-              )}
-            </div>
+            ) : null}
           </div>
+
           <p style={{ textAlign: "center", fontSize: "11px", color: "var(--text3)", margin: "8px 0 0" }}>
-            {hasContext ? `${contextCount} vault item(s) in context` : "No vault selected — LexAI will search all your documents"}
+            {hasContext ? `${contextCount} vault item(s) in context · Shift+Enter for new line` : "Shift+Enter for new line"}
           </p>
         </div>
       </div>
