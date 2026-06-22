@@ -94,3 +94,5 @@ ingestion_*.log
 # NOTE: batch_download.py, bulk_ingest.py, scripts/seed.py, and acts.txt
 # are PRODUCTION scripts — they are intentionally tracked in Git.
 # DO NOT add them back to .gitignore.
+PITCH.md
+rbac.txt

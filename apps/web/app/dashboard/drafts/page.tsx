@@ -5,6 +5,7 @@ import {
   draftsApi, draftSessionsApi,
   DraftEvent, DraftSource, ContractBlock, DraftQuestion, DraftIssue, DraftIntent, AdversarialFinding,
 } from "@/lib/api";
+import { useAuthStore } from "@/lib/stores/auth-store";
 import { toast } from "sonner";
 import {
   Plus, FileText, ArrowLeft, Download, CheckCircle, AlertTriangle,
@@ -84,6 +85,8 @@ interface DraftListItem {
 
 export default function DraftsPage() {
   const qc = useQueryClient();
+  const { user } = useAuthStore();
+  const userRole = user?.role || "legal_team";
   const [view, setView] = useState<View>("list");
   const [showInfoModal, setShowInfoModal] = useState<boolean>(false);
 
@@ -485,6 +488,7 @@ export default function DraftsPage() {
       adversarialAssessment={adversarialAssessment}
       adversarialMissingSections={adversarialMissingSections}
       contractType={contractTypeForFix}
+      userRole={userRole}
       onSelectBlock={setActiveBlock}
       onStartEdit={(id, content) => setEditingBlock({ id, content })}
       onEditChange={(content) => setEditingBlock(prev => prev ? { ...prev, content } : null)}
@@ -494,6 +498,7 @@ export default function DraftsPage() {
       onBack={() => changeView("list")}
       onBlocksUpdated={setBlocks}
       onAdversarialFindingsUpdated={setAdversarialFindings}
+      onStatusChange={setDraftStatus}
     />
   );
 
@@ -908,9 +913,9 @@ function EditorView({
   draftId, title, blocks, issues, sources, status,
   activeBlock, editingBlock, isSaving, isExporting,
   adversarialFindings, adversarialRisk, adversarialAssessment, adversarialMissingSections,
-  contractType,
+  contractType, userRole,
   onSelectBlock, onStartEdit, onEditChange, onSaveEdit, onCancelEdit,
-  onExport, onBack, onBlocksUpdated, onAdversarialFindingsUpdated,
+  onExport, onBack, onBlocksUpdated, onAdversarialFindingsUpdated, onStatusChange,
 }: {
   draftId: string | null;
   title: string;
@@ -927,6 +932,7 @@ function EditorView({
   adversarialAssessment: string;
   adversarialMissingSections: string[];
   contractType: string;
+  userRole: string;
   onSelectBlock: (id: string) => void;
   onStartEdit: (id: string, content: string) => void;
   onEditChange: (content: string) => void;
@@ -936,14 +942,17 @@ function EditorView({
   onBack: () => void;
   onBlocksUpdated: (blocks: ContractBlock[]) => void;
   onAdversarialFindingsUpdated: (findings: AdversarialFinding[]) => void;
+  onStatusChange: (status: string) => void;
 }) {
   const [rightPanel, setRightPanel] = useState<"issues" | "sources" | "provenance" | "redteam">("issues");
   const [insertingFix, setInsertingFix] = useState<string | null>(null); // block_id being fixed
   const [expandedFindings, setExpandedFindings] = useState<Set<string>>(new Set());
+  const [isApproving, setIsApproving] = useState(false);
   const blockRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const highIssues = issues.filter(i => i.severity === "high");
   const reviewNeeded = blocks.filter(b => b.needs_review);
   const criticalFindings = adversarialFindings.filter(f => f.severity === "critical");
+  const canApprove = ["reviewer", "ops_admin", "super_admin"].includes(userRole);
 
   const toggleFinding = (id: string) => {
     const next = new Set(expandedFindings);
@@ -960,6 +969,21 @@ function EditorView({
       el.scrollIntoView({ behavior: "smooth", block: "center" });
       el.style.outline = "3px solid #dc2626";
       setTimeout(() => { if (el) el.style.outline = ""; }, 2000);
+    }
+  };
+
+  // Approve draft — only for reviewer/admin
+  const approveDraft = async () => {
+    if (!draftId) return;
+    setIsApproving(true);
+    try {
+      await draftsApi.approve(draftId);
+      onStatusChange("approved");
+      toast.success("Draft approved successfully!");
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail || "Failed to approve draft");
+    } finally {
+      setIsApproving(false);
     }
   };
 
@@ -1012,6 +1036,17 @@ function EditorView({
           )}
         </div>
         <div className="toolbar-actions">
+          {canApprove && status !== "approved" && (
+            <button
+              className="btn-approve-draft"
+              onClick={approveDraft}
+              disabled={isApproving}
+              title="Approve this contract draft"
+            >
+              {isApproving ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />}
+              Approve Draft
+            </button>
+          )}
           <button className="btn-export" onClick={onExport} disabled={isExporting}>
             {isExporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
             Export Word
@@ -1574,6 +1609,10 @@ const STYLES = `
   .toolbar-actions { display: flex; gap: 10px; flex-shrink: 0; }
   .btn-export { display: flex; align-items: center; gap: 6px; padding: 9px 18px; background: var(--accent); color: #fff; border: none; border-radius: 10px; font-weight: 700; font-size: 13px; cursor: pointer; transition: all 0.2s; }
   .btn-export:disabled { opacity: 0.6; cursor: not-allowed; }
+  .btn-approve-draft { display: flex; align-items: center; gap: 6px; padding: 9px 18px; background: linear-gradient(135deg, #059669, #047857); color: #fff; border: none; border-radius: 10px; font-weight: 700; font-size: 13px; cursor: pointer; transition: all 0.2s; box-shadow: 0 2px 8px rgba(5,150,105,0.35); }
+  .btn-approve-draft:hover:not(:disabled) { background: linear-gradient(135deg, #10b981, #059669); transform: translateY(-1px); box-shadow: 0 4px 14px rgba(5,150,105,0.45); }
+  .btn-approve-draft:disabled { opacity: 0.6; cursor: not-allowed; }
+
 
   .editor-layout { display: grid; grid-template-columns: 1fr 340px; gap: 24px; flex: 1; min-height: 0; }
 

@@ -90,6 +90,7 @@ export default function TicketsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch]   = useState("");
   const searchRef             = useRef<HTMLInputElement>(null);
+  const [showInfo, setShowInfo] = useState(false);
 
   const isAdmin = user ? ["ops_admin", "super_admin", "reviewer"].includes(user.role) : false;
 
@@ -134,9 +135,27 @@ export default function TicketsPage() {
               <h1>Legal Requests</h1>
               <p>Tickets are created via the SharePoint + Power Automate pipeline · Read-only from SharePoint, internal notes via the chat panel</p>
             </div>
-            <div className="tkt-synced" style={{ marginTop: 4 }}>
-              <div className="tkt-synced-dot" />
-              SharePoint Sync
+            <div style={{ display: "flex", gap: "10px", alignItems: "center", marginTop: 4 }}>
+              <button 
+                onClick={() => setShowInfo(true)}
+                style={{
+                  width: 32, height: 32, borderRadius: "50%", background: "var(--bg2)", 
+                  border: "1px solid var(--border)", display: "flex", alignItems: "center", 
+                  justifyContent: "center", cursor: "pointer", color: "var(--text2)",
+                  transition: "all 0.2s"
+                }}
+                onMouseOver={e => {e.currentTarget.style.color = "var(--text)"; e.currentTarget.style.borderColor = "var(--accent)"}}
+                onMouseOut={e => {e.currentTarget.style.color = "var(--text2)"; e.currentTarget.style.borderColor = "var(--border)"}}
+                title="How Ticketing Works"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{width: 16, height: 16}}>
+                  <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
+                </svg>
+              </button>
+              <div className="tkt-synced">
+                <div className="tkt-synced-dot" />
+                SharePoint Sync
+              </div>
             </div>
           </div>
 
@@ -225,6 +244,59 @@ export default function TicketsPage() {
         </div>
 
       </div>
+
+      {/* Info Modal */}
+      {showInfo && (
+        <div style={{position:"fixed", top:0, left:0, right:0, bottom:0, background:"rgba(0,0,0,0.4)", backdropFilter:"blur(4px)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999, padding: 24}}>
+          <div style={{background:"var(--white)", width:"100%", maxWidth: 520, borderRadius: 16, padding: 32, boxShadow: "var(--shadow-lg)", position:"relative", animation: "tkt-pulse 0.2s ease-out"}}>
+            <button 
+              onClick={() => setShowInfo(false)}
+              style={{position:"absolute", top: 20, right: 20, background:"none", border:"none", cursor:"pointer", color:"var(--text2)"}}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width:20, height:20}}><path d="M18 6L6 18M6 6l12 12"/></svg>
+            </button>
+            <h2 style={{fontSize: 20, fontWeight: 700, margin: "0 0 24px", color: "var(--text)", display: "flex", alignItems: "center", gap: 10}}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" style={{width:24, height:24}}><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+              How Ticketing Works
+            </h2>
+            <div style={{display:"flex", flexDirection:"column", gap: 20}}>
+              <div style={{display:"flex", gap:16, alignItems:"flex-start"}}>
+                <div style={{width:40, height:40, borderRadius:8, background:"rgba(129,140,248,0.1)", color:"#818cf8", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0}}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width:20, height:20}}><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+                </div>
+                <div>
+                  <h4 style={{margin: "0 0 4px", fontSize: 15, fontWeight: 600, color: "var(--text)"}}>Creating a Ticket via Email</h4>
+                  <p style={{margin: 0, fontSize: 13, color: "var(--text2)", lineHeight: 1.5}}>To create a ticket, email the legal team. A specific legal email address must be in the <strong>To</strong> or <strong>Cc</strong> field to be logged in LexAI.</p>
+                </div>
+              </div>
+              <div style={{display:"flex", gap:16, alignItems:"flex-start"}}>
+                <div style={{width:40, height:40, borderRadius:8, background:"rgba(245,158,11,0.1)", color:"#f59e0b", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0}}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width:20, height:20}}><path d="M3 3h18v18H3z"/><path d="M12 8v8"/><path d="M8 12h8"/></svg>
+                </div>
+                <div>
+                  <h4 style={{margin: "0 0 4px", fontSize: 15, fontWeight: 600, color: "var(--text)"}}>Entity Name Required</h4>
+                  <p style={{margin: 0, fontSize: 13, color: "var(--text2)", lineHeight: 1.5}}>You must include the name of your entity in square brackets (e.g., <strong>[ZIL]</strong> or <strong>[ZMSL]</strong>) in the subject line or email body so it can be routed correctly.</p>
+                </div>
+              </div>
+              <div style={{display:"flex", gap:16, alignItems:"flex-start"}}>
+                <div style={{width:40, height:40, borderRadius:8, background:"rgba(52,211,153,0.1)", color:"#34d399", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0}}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width:20, height:20}}><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>
+                </div>
+                <div>
+                  <h4 style={{margin: "0 0 4px", fontSize: 15, fontWeight: 600, color: "var(--text)"}}>Replies vs. New Tickets</h4>
+                  <p style={{margin: 0, fontSize: 13, color: "var(--text2)", lineHeight: 1.5}}>A brand new email creates a new ticket. If you reply to an existing email thread, your message will be automatically added as a new message inside that same ticket.</p>
+                </div>
+              </div>
+            </div>
+            <button 
+              onClick={() => setShowInfo(false)}
+              style={{width:"100%", marginTop: 32, padding: "12px", background:"var(--bg2)", border:"none", borderRadius: 8, color:"var(--text)", fontWeight: 600, cursor:"pointer"}}
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

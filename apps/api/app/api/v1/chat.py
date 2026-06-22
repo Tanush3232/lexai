@@ -57,15 +57,50 @@ async def list_sessions(
         .limit(50)
     )
     sessions = result.all()
-    return [
-        {
+
+    out = []
+    for s in sessions:
+        # Fetch the last assistant message for preview
+        msg_result = await session.exec(
+            select(ChatMessage)
+            .where(ChatMessage.session_id == s.id)
+            .order_by(ChatMessage.created_at.asc())
+        )
+        msgs = msg_result.all()
+        msg_count = len(msgs)
+        last_user_msg = next((m.content for m in reversed(msgs) if m.role == "user"), None)
+
+        out.append({
             "id": s.id,
             "title": s.title,
             "scope_type": s.scope_type,
+            "message_count": msg_count,
+            "last_query": last_user_msg,
             "created_at": s.created_at.isoformat(),
-        }
-        for s in sessions
-    ]
+            "updated_at": s.updated_at.isoformat(),
+        })
+    return out
+
+
+@router.delete("/sessions/{session_id}", status_code=204)
+async def delete_session(
+    session_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    """Delete a chat session and all its messages."""
+    result = await session.exec(select(ChatSession).where(ChatSession.id == session_id))
+    chat_session = result.first()
+    if not chat_session or chat_session.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Delete all messages first (FK constraint)
+    msg_result = await session.exec(select(ChatMessage).where(ChatMessage.session_id == session_id))
+    for msg in msg_result.all():
+        await session.delete(msg)
+
+    await session.delete(chat_session)
+    await session.commit()
 
 
 @router.post("/sessions/{session_id}/messages", response_model=ChatMessageRead)

@@ -27,6 +27,14 @@ logger = get_logger("drafts_endpoint")
 
 router = APIRouter()
 
+# Roles that have elevated access to all drafts (not just their own)
+_ADMIN_ROLES = {"ops_admin", "super_admin", "reviewer"}
+
+
+def _is_privileged(user) -> bool:
+    """Return True if the user can view/act on any draft regardless of ownership."""
+    return user.role in _ADMIN_ROLES
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POST / — Legacy direct generation (kept for backwards compatibility)
@@ -100,11 +108,11 @@ async def list_drafts(
     session: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ):
-    result = await session.exec(
-        select(ContractDraft)
-        .where(ContractDraft.user_id == current_user.id)
-        .order_by(ContractDraft.updated_at.desc())
-    )
+    """List drafts. Admins/reviewers see ALL drafts; counsel sees only their own."""
+    query = select(ContractDraft).order_by(ContractDraft.updated_at.desc())
+    if not _is_privileged(current_user):
+        query = query.where(ContractDraft.user_id == current_user.id)
+    result = await session.exec(query)
     return result.all()
 
 
@@ -118,9 +126,12 @@ async def get_draft(
     session: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ):
+    """Fetch a draft. Admins/reviewers can open any draft; counsel only their own."""
     result = await session.exec(select(ContractDraft).where(ContractDraft.id == draft_id))
     draft = result.first()
-    if not draft or draft.user_id != current_user.id:
+    if not draft:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    if not _is_privileged(current_user) and draft.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Draft not found")
     await log_action(session, current_user.id, "read", "draft", draft_id)
     return draft
@@ -140,7 +151,9 @@ async def update_draft(
     """Update draft content, blocks, or title."""
     result = await session.exec(select(ContractDraft).where(ContractDraft.id == draft_id))
     draft = result.first()
-    if not draft or draft.user_id != current_user.id:
+    if not draft:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    if not _is_privileged(current_user) and draft.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Draft not found")
     if draft.status == "approved":
         raise HTTPException(status_code=400, detail="Approved drafts cannot be edited")
@@ -169,10 +182,12 @@ async def delete_draft(
     session: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ):
-    """Delete a contract draft."""
+    """Delete a contract draft. Admins/reviewers can delete any draft."""
     result = await session.exec(select(ContractDraft).where(ContractDraft.id == draft_id))
     draft = result.first()
-    if not draft or draft.user_id != current_user.id:
+    if not draft:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    if not _is_privileged(current_user) and draft.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Draft not found")
     
     await session.delete(draft)
@@ -204,7 +219,9 @@ async def auto_insert_fix_endpoint(
     """
     result = await session.exec(select(ContractDraft).where(ContractDraft.id == draft_id))
     draft = result.first()
-    if not draft or draft.user_id != current_user.id:
+    if not draft:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    if not _is_privileged(current_user) and draft.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Draft not found")
     if draft.status == "approved":
         raise HTTPException(status_code=400, detail="Approved drafts cannot be edited")
@@ -325,7 +342,9 @@ async def export_draft_docx(
     """Export the contract draft as a Word (.docx) document."""
     result = await session.exec(select(ContractDraft).where(ContractDraft.id == draft_id))
     draft = result.first()
-    if not draft or draft.user_id != current_user.id:
+    if not draft:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    if not _is_privileged(current_user) and draft.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Draft not found")
 
     try:

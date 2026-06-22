@@ -113,12 +113,23 @@ export const chatApi = {
     scope_folder_ids: string[];
     scope_document_ids: string[];
   }) => api.post("/chat/sessions", data),
-  listSessions: () => api.get("/chat/sessions"),
+  listSessions: () => api.get<ChatHistorySession[]>("/chat/sessions"),
+  deleteSession: (sessionId: string) => api.delete(`/chat/sessions/${sessionId}`),
   sendMessage: (sessionId: string, content: string) =>
     api.post(`/chat/sessions/${sessionId}/messages`, { content }),
   getMessages: (sessionId: string) => api.get(`/chat/sessions/${sessionId}/messages`),
   improvePrompt: (content: string) => api.post("/chat/improve", { content }),
 };
+
+export interface ChatHistorySession {
+  id: string;
+  title: string;
+  scope_type: string;
+  message_count: number;
+  last_query: string | null;
+  created_at: string;
+  updated_at: string;
+}
 
 // Drafts — Legacy (still used for viewing existing drafts)
 export const draftsApi = {
