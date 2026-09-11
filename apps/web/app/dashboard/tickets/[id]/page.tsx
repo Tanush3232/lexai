@@ -534,9 +534,19 @@ export default function TicketDetailPage() {
 
   const loadAllUsers = useCallback(async () => {
     if (allUsers.length > 0) return;
-    const res = await api.get(`/tickets/${id}/mentionable_users`);
-    setAllUsers(res.data);
+    try {
+      const res = await api.get(`/tickets/${id}/mentionable_users`);
+      setAllUsers(res.data);
+    } catch {
+      // ignore
+    }
   }, [id, allUsers.length]);
+
+  useEffect(() => {
+    if (isAdmin && id) {
+      loadAllUsers();
+    }
+  }, [isAdmin, id, loadAllUsers]);
 
   const handleStatusChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
     await api.patch(`/tickets/${id}`, { status: e.target.value });
@@ -718,6 +728,7 @@ export default function TicketDetailPage() {
                     className="tkt-assign-sel"
                     onChange={handleAssign}
                     onClick={loadAllUsers}
+                    onFocus={loadAllUsers}
                     defaultValue=""
                   >
                     <option value="" disabled>Select user to assign…</option>
