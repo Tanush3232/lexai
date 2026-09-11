@@ -136,11 +136,11 @@ async def delete_user(
 
         # 3. Chat Sessions Details
         from app.models.chat import ChatMessage
-        chats = await session.execute(select(ChatSession).where(ChatSession.user_id == user_id))
-        chat_list = chats.scalars().all()
-        for chat in chat_list:
-             await session.execute(delete(ChatMessage).where(ChatMessage.session_id == chat.id))
-             await session.delete(chat)
+        chats_res = await session.execute(select(ChatSession.id).where(ChatSession.user_id == user_id))
+        chat_ids = chats_res.scalars().all()
+        if chat_ids:
+            await session.execute(delete(ChatMessage).where(ChatMessage.session_id.in_(chat_ids)))
+            await session.execute(delete(ChatSession).where(ChatSession.user_id == user_id))
         
         # 4. Drafts
         await session.execute(delete(ContractDraft).where(ContractDraft.user_id == user_id))
@@ -161,14 +161,11 @@ async def delete_user(
 
         # 7. Web Search — citations first (FK → sessions), then sessions (FK → users)
         from app.models.web_search import WebSearchSession, WebSearchCitation
-        ws_sessions = await session.execute(
-            select(WebSearchSession).where(WebSearchSession.user_id == user_id)
-        )
-        for ws in ws_sessions.scalars().all():
-            await session.execute(
-                delete(WebSearchCitation).where(WebSearchCitation.session_id == ws.id)
-            )
-            await session.delete(ws)
+        ws_res = await session.execute(select(WebSearchSession.id).where(WebSearchSession.user_id == user_id))
+        ws_ids = ws_res.scalars().all()
+        if ws_ids:
+            await session.execute(delete(WebSearchCitation).where(WebSearchCitation.session_id.in_(ws_ids)))
+            await session.execute(delete(WebSearchSession).where(WebSearchSession.user_id == user_id))
 
         # 8. Ticket participations (TicketUser rows where this user is assignee/watcher)
         from app.models.ticket import TicketUser

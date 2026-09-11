@@ -95,4 +95,10 @@ ingestion_*.log
 # are PRODUCTION scripts — they are intentionally tracked in Git.
 # DO NOT add them back to .gitignore.
 PITCH.md
+rbac.csv
 rbac.txt
+
+LexAI_Global_Vault_BRD (1).pdf
+ponytail.md.txt
+brd_output.txt
+apps/api/delete_test_tickets.py

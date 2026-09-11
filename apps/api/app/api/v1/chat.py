@@ -121,6 +121,23 @@ async def send_message(
     folder_ids = [f for f in chat_session.scope_folder_ids.split(",") if f]
     doc_ids = [d for d in chat_session.scope_document_ids.split(",") if d]
 
+    # If folder_ids are specified but doc_ids is empty, expand to all documents in those folders (and child subfolders)
+    if folder_ids and not doc_ids:
+        all_target_folder_ids = set(folder_ids)
+        child_res = await db.exec(select(Folder.id).where(Folder.parent_id.in_(folder_ids)))
+        child_ids = child_res.all()
+        if child_ids:
+            all_target_folder_ids.update(child_ids)
+            sub_res = await db.exec(select(Folder.id).where(Folder.parent_id.in_(child_ids)))
+            sub_ids = sub_res.all()
+            if sub_ids:
+                all_target_folder_ids.update(sub_ids)
+
+        folder_docs_res = await db.exec(
+            select(Document.id).where(Document.folder_id.in_(list(all_target_folder_ids)))
+        )
+        doc_ids = [str(d) for d in folder_docs_res.all()]
+
     logger.info("chat.request.start", session_id=session_id, folder_count=len(folder_ids), doc_count=len(doc_ids))
 
     # Save user message

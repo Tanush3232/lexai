@@ -99,8 +99,8 @@ async def get_mentionable_users(
     session: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ):
-    # Valid LexAI users. We just return all active users for the mention dropdown.
+    # Valid LexAI users. We return all active users except super_admin (devs) for the mention/assign dropdown.
     # The actual blocking happens if they pick a non-participant.
-    result = await session.exec(select(User).where(User.is_active == True)) # noqa: E712
+    result = await session.execute(select(User).where(User.is_active == True, User.role != "super_admin")) # noqa: E712
     users = result.all()
     return [{"id": u.id, "email": u.email, "full_name": u.full_name, "role": u.role} for u in users]

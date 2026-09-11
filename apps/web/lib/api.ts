@@ -71,11 +71,23 @@ export const authApi = {
     ),
 };
 
+export interface Folder {
+  id: string;
+  name: string;
+  description?: string;
+  owner_id: string;
+  is_global: boolean;
+  parent_id?: string | null;
+  document_count: number;
+  created_at: string;
+}
+
 // Folders
 export const foldersApi = {
-  list: () => api.get("/folders/"),
-  create: (data: { name: string; description?: string }) => api.post("/folders/", data),
-  get: (id: string) => api.get(`/folders/${id}`),
+  list: () => api.get<Folder[]>("/folders/"),
+  create: (data: { name: string; description?: string; is_global?: boolean; parent_id?: string | null }) =>
+    api.post<Folder>("/folders/", data),
+  get: (id: string) => api.get<Folder>(`/folders/${id}`),
   delete: (id: string) => api.delete(`/folders/${id}`),
 };
 

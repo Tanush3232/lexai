@@ -35,6 +35,7 @@ class ClauseData:
     parties_involved: List[str] = field(default_factory=list)
     raw_references: List[str] = field(default_factory=list)
     resolved_references: List[str] = field(default_factory=list)
+    is_global: bool = False
 
 
 # ─────────────────────────────────────────────
@@ -228,7 +229,7 @@ class ClauseSegmenter:
     Converts parsed pages into atomic ClauseData objects.
     """
 
-    def segment(self, parsed: Dict, doc_id: str, folder_id: str) -> List[ClauseData]:
+    def segment(self, parsed: Dict, doc_id: str, folder_id: str, is_global: bool = False) -> List[ClauseData]:
         # Build line stream with page numbers
         lines_with_pages: List[Tuple[str, int]] = []
         for page_data in parsed.get("pages", []):
@@ -264,6 +265,7 @@ class ClauseSegmenter:
                 page_end=buffer_pages[-1] if buffer_pages else 1,
                 position_in_doc=position,
                 raw_references=raw_refs,
+                is_global=is_global,
             ))
             position += 1
 
@@ -384,6 +386,7 @@ async def embed_and_store_clauses(clauses: List[ClauseData], document_name: str,
                 "position_in_doc": clause.position_in_doc,
                 "parties_involved": clause.parties_involved,
                 "references": clause.resolved_references,
+                "is_global": clause.is_global,
             },
         )
         points.append(point)
@@ -410,6 +413,7 @@ async def index_clauses_to_elasticsearch(clauses: List[ClauseData], document_nam
             "page_start": c.page_start,
             "page_end": c.page_end,
             "position_in_doc": c.position_in_doc,
+            "is_global": c.is_global,
         }
         for c in clauses
     ]

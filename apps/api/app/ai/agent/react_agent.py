@@ -241,8 +241,18 @@ class ReActAgent:
             logger.info("agent.synthesize.success", answer_len=len(draft_answer))
         except Exception as e:
             logger.error("agent.synthesize_failed", error=str(e), exc_info=True)
+            err_str = str(e)
+            if "PermissionDenied" in err_str or "denied access" in err_str.lower():
+                user_msg = (
+                    "**Gemini API Error (403 PermissionDenied):** The Google Cloud project for your "
+                    "`GOOGLE_API_KEY` has been denied access by Google. "
+                    "Please generate an active API key from [Google AI Studio](https://aistudio.google.com/app/apikey) "
+                    "and update `GOOGLE_API_KEY` in `apps/api/.env`."
+                )
+            else:
+                user_msg = f"An error occurred while synthesising the answer: {err_str}"
             return {
-                "answer": f"An error occurred while synthesising the answer: {str(e)}",
+                "answer": user_msg,
                 "sources": [],
                 "confidence": "low",
             }

@@ -11,6 +11,8 @@ class FolderBase(SQLModel):
     name: str
     description: Optional[str] = None
     owner_id: str = Field(foreign_key="users.id", index=True)
+    is_global: bool = Field(default=False)
+    parent_id: Optional[str] = Field(default=None, foreign_key="folders.id", index=True)
 
 
 class Folder(FolderBase, table=True):
@@ -23,6 +25,8 @@ class Folder(FolderBase, table=True):
 class FolderCreate(SQLModel):
     name: str
     description: Optional[str] = None
+    is_global: bool = False
+    parent_id: Optional[str] = None
 
 
 class FolderRead(FolderBase):

@@ -125,10 +125,10 @@ async def upload_document(
     current_user: User = Depends(get_current_user),
 ):
     logger.info("upload_started", folder_id=folder_id, filename=file.filename, user_id=current_user.id)
-    # Verify folder ownership
+    # Verify folder ownership or global access
     folder_result = await session.exec(select(Folder).where(Folder.id == folder_id))
     folder = folder_result.first()
-    if not folder or folder.owner_id != current_user.id:
+    if not folder or (not folder.is_global and folder.owner_id != current_user.id):
         logger.warning("upload_failed_folder_not_found", folder_id=folder_id, user_id=current_user.id)
         raise HTTPException(status_code=404, detail="Folder not found")
 
@@ -162,6 +162,7 @@ async def upload_document(
         size_bytes=len(file_bytes),
         storage_key=storage_key,
         status="uploaded",
+        is_global=folder.is_global,
     )
     logger.info("saving_document_record", doc_id=doc_id)
     session.add(doc)
@@ -197,7 +198,7 @@ async def list_documents(
 ):
     folder_result = await session.exec(select(Folder).where(Folder.id == folder_id))
     folder = folder_result.first()
-    if not folder or folder.owner_id != current_user.id:
+    if not folder or (not folder.is_global and folder.owner_id != current_user.id):
         raise HTTPException(status_code=404, detail="Folder not found")
 
     result = await session.exec(select(Document).where(Document.folder_id == folder_id))
@@ -214,7 +215,7 @@ async def get_document(
 ):
     result = await session.exec(select(Document).where(Document.id == document_id))
     doc = result.first()
-    if not doc or doc.owner_id != current_user.id:
+    if not doc or (not doc.is_global and doc.owner_id != current_user.id):
         raise HTTPException(status_code=404, detail="Document not found")
     return doc
 
@@ -230,7 +231,7 @@ async def download_document(
 
     result = await session.exec(select(Document).where(Document.id == document_id))
     doc = result.first()
-    if not doc or doc.owner_id != current_user.id:
+    if not doc or (not doc.is_global and doc.owner_id != current_user.id):
         raise HTTPException(status_code=404, detail="Document not found")
 
     file_bytes = await download_file(doc.storage_key)
@@ -256,7 +257,7 @@ async def get_document_file_url(
 
     result = await session.exec(select(Document).where(Document.id == document_id))
     doc = result.first()
-    if not doc or doc.owner_id != current_user.id:
+    if not doc or (not doc.is_global and doc.owner_id != current_user.id):
         raise HTTPException(status_code=404, detail="Document not found")
 
     # Return the backend streaming endpoint instead of a direct MinIO URL.
@@ -280,7 +281,7 @@ async def get_document_tree(
     """
     doc_result = await session.exec(select(Document).where(Document.id == document_id))
     doc = doc_result.first()
-    if not doc or doc.owner_id != current_user.id:
+    if not doc or (not doc.is_global and doc.owner_id != current_user.id):
         raise HTTPException(status_code=404, detail="Document not found")
 
     tree_result = await session.exec(
@@ -353,7 +354,7 @@ async def get_document_text_content(
 
     doc_result = await session.exec(select(Document).where(Document.id == document_id))
     doc = doc_result.first()
-    if not doc or doc.owner_id != current_user.id:
+    if not doc or (not doc.is_global and doc.owner_id != current_user.id):
         raise HTTPException(status_code=404, detail="Document not found")
 
     if doc.status not in ("indexed", "error"):

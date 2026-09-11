@@ -59,6 +59,10 @@ def ingest_document(self, document_id: str, storage_key: str, document_name: str
 
         async with AsyncSessionLocal() as session:
             try:
+                doc_res = await session.exec(select(Document).where(Document.id == document_id))
+                doc_rec = doc_res.first()
+                is_global = doc_rec.is_global if doc_rec else False
+
                 # ── 1. Download ──────────────────────────────────
                 self.update_state(state="PROGRESS", meta={"step": "downloading"})
                 file_bytes = await download_file(storage_key)
@@ -87,7 +91,7 @@ def ingest_document(self, document_id: str, storage_key: str, document_name: str
                 # ── 3. Segment into clauses ───────────────────────
                 self.update_state(state="PROGRESS", meta={"step": "segmenting"})
                 segmenter = ClauseSegmenter()
-                clauses = segmenter.segment(parsed, document_id, folder_id)
+                clauses = segmenter.segment(parsed, document_id, folder_id, is_global=is_global)
                 logger.info("ingestion.segmented", doc_id=document_id, clauses=len(clauses))
 
                 if not clauses:

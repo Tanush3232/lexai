@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import {
   Loader2, FileText, X, ChevronDown, CheckCircle,
   Sparkles, Square, MessageSquare, Database, Plus, ArrowUp, ArrowLeft,
+  Lock, Globe,
 } from "lucide-react";
 
 // ─────────────────────────────────────────────
@@ -480,42 +481,72 @@ interface VaultModalProps {
 }
 
 function VaultModal({ folders, selectedDocs, selectedFolderIds, onToggleDoc, onToggleFolder, onClose }: VaultModalProps) {
+  const [modalTab, setModalTab] = useState<"personal" | "global">("personal");
   const [expanded, setExpanded] = useState<string[]>([]);
   const selCount = selectedDocs.length + selectedFolderIds.length;
 
+  const handleToggleExpand = (id: string) => {
+    setExpanded(prev => prev.includes(id) ? prev.filter(e => e !== id) : [...prev, id]);
+  };
+
+  // Only show root folders (parent_id is null or empty) at top level
+  const personalRootFolders = folders.filter((f: any) => !f.is_global && !f.parent_id);
+  const globalRootFolders = folders.filter((f: any) => f.is_global && !f.parent_id);
+  const activeRootList = modalTab === "personal" ? personalRootFolders : globalRootFolders;
+
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.45)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center" }} onClick={onClose}>
-      <div style={{ width: "520px", maxHeight: "68vh", background: "var(--white)", borderRadius: "18px", boxShadow: "0 24px 80px rgba(0,0,0,0.18)", display: "flex", flexDirection: "column", overflow: "hidden" }} onClick={e => e.stopPropagation()}>
-        <div style={{ padding: "22px 26px 16px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
+      <div style={{ width: "540px", maxHeight: "72vh", background: "var(--white)", borderRadius: "18px", boxShadow: "0 24px 80px rgba(0,0,0,0.18)", display: "flex", flexDirection: "column", overflow: "hidden" }} onClick={e => e.stopPropagation()}>
+        <div style={{ padding: "22px 26px 14px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
           <div>
             <h2 style={{ fontSize: "16px", fontWeight: 700, margin: "0 0 4px" }}>Choose Vault</h2>
-            <p style={{ fontSize: "12px", color: "var(--text2)", margin: 0 }}>Select files or entire folders to use as context</p>
+            <p style={{ fontSize: "12px", color: "var(--text2)", margin: 0 }}>Select legal files or folders from personal or global pools</p>
           </div>
           <button onClick={onClose} style={{ border: "none", background: "var(--bg)", borderRadius: "8px", width: "32px", height: "32px", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
             <X size={15} />
           </button>
         </div>
 
-        <div style={{ flex: 1, overflowY: "auto", padding: "10px 14px" }}>
-          {folders.length === 0 ? (
-            <div style={{ padding: "40px", textAlign: "center", color: "var(--text3)" }}>No folders found. Upload documents in the Vault tab first.</div>
-          ) : folders.map((f: any) => (
-            <div key={f.id} style={{ marginBottom: "3px" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "6px", padding: "9px 10px", borderRadius: "10px", background: selectedFolderIds.includes(f.id) ? "var(--accent-light)" : "transparent", transition: "background 0.15s" }}>
-                <button onClick={() => setExpanded(p => p.includes(f.id) ? p.filter(e => e !== f.id) : [...p, f.id])} style={{ background: "none", border: "none", cursor: "pointer", padding: "2px", color: "var(--text3)", flexShrink: 0 }}>
-                  <ChevronDown size={14} style={{ transform: expanded.includes(f.id) ? "rotate(0)" : "rotate(-90deg)", transition: "transform 0.2s" }} />
-                </button>
-                <div onClick={() => onToggleFolder(f.id)} style={{ flex: 1, display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
-                  <Database size={14} style={{ color: selectedFolderIds.includes(f.id) ? "var(--accent)" : "var(--text2)", flexShrink: 0 }} />
-                  <span style={{ fontSize: "13.5px", fontWeight: 600, color: selectedFolderIds.includes(f.id) ? "var(--accent)" : "var(--text)" }}>{f.name}</span>
-                  <span style={{ fontSize: "11px", color: "var(--text3)" }}>({f.document_count} files)</span>
-                </div>
-                {selectedFolderIds.includes(f.id) && <CheckCircle size={14} style={{ color: "var(--accent)", flexShrink: 0 }} />}
-              </div>
-              {expanded.includes(f.id) && (
-                <VaultFolderFiles folderId={f.id} folderName={f.name} selectedDocs={selectedDocs} onToggleDoc={onToggleDoc} />
-              )}
+        {/* Modal Scope Tabs */}
+        <div style={{ padding: "12px 20px 0" }}>
+          <div className="scope-tabs" style={{ width: "100%", marginBottom: "10px" }}>
+            <div 
+              className={`scope-tab ${modalTab === "personal" ? "active" : ""}`}
+              onClick={() => setModalTab("personal")}
+              style={{ flex: 1, textAlign: "center", display: "flex", justifyContent: "center", alignItems: "center", gap: "6px" }}
+            >
+              <Lock size={12} />
+              <span>Personal Vault ({personalRootFolders.length})</span>
             </div>
+            <div 
+              className={`scope-tab ${modalTab === "global" ? "active" : ""}`}
+              onClick={() => setModalTab("global")}
+              style={{ flex: 1, textAlign: "center", display: "flex", justifyContent: "center", alignItems: "center", gap: "6px" }}
+            >
+              <Globe size={12} />
+              <span>Global Vault ({globalRootFolders.length})</span>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ flex: 1, overflowY: "auto", padding: "8px 14px" }}>
+          {activeRootList.length === 0 ? (
+            <div style={{ padding: "36px 20px", textAlign: "center", color: "var(--text3)", fontSize: "13px" }}>
+              {modalTab === "personal" ? "No personal folders found." : "No global repository folders found."}
+            </div>
+          ) : activeRootList.map((f: any) => (
+            <VaultFolderItem
+              key={f.id}
+              folder={f}
+              allFolders={folders}
+              level={0}
+              expanded={expanded}
+              onToggleExpand={handleToggleExpand}
+              selectedFolderIds={selectedFolderIds}
+              onToggleFolder={onToggleFolder}
+              selectedDocs={selectedDocs}
+              onToggleDoc={onToggleDoc}
+            />
           ))}
         </div>
 
@@ -532,8 +563,115 @@ function VaultModal({ folders, selectedDocs, selectedFolderIds, onToggleDoc, onT
   );
 }
 
-function VaultFolderFiles({ folderId, folderName, selectedDocs, onToggleDoc }: {
-  folderId: string; folderName: string; selectedDocs: DocItem[]; onToggleDoc: (doc: DocItem) => void;
+function VaultFolderItem({
+  folder,
+  allFolders,
+  level = 0,
+  expanded,
+  onToggleExpand,
+  selectedFolderIds,
+  onToggleFolder,
+  selectedDocs,
+  onToggleDoc,
+}: {
+  folder: any;
+  allFolders: any[];
+  level?: number;
+  expanded: string[];
+  onToggleExpand: (id: string) => void;
+  selectedFolderIds: string[];
+  onToggleFolder: (id: string) => void;
+  selectedDocs: DocItem[];
+  onToggleDoc: (doc: DocItem) => void;
+}) {
+  const isExpanded = expanded.includes(folder.id);
+  const isSelected = selectedFolderIds.includes(folder.id);
+  const childFolders = allFolders.filter((f: any) => f.parent_id === folder.id);
+
+  return (
+    <div style={{ marginBottom: "3px" }}>
+      <div 
+        style={{ 
+          display: "flex", 
+          alignItems: "center", 
+          gap: "6px", 
+          padding: "7px 10px", 
+          paddingLeft: `${8 + level * 20}px`,
+          borderRadius: "10px", 
+          background: isSelected ? "var(--accent-light)" : "transparent", 
+          transition: "background 0.15s" 
+        }}
+      >
+        <button 
+          onClick={() => onToggleExpand(folder.id)} 
+          style={{ background: "none", border: "none", cursor: "pointer", padding: "2px", color: "var(--text3)", flexShrink: 0 }}
+        >
+          <ChevronDown 
+            size={14} 
+            style={{ 
+              transform: isExpanded ? "rotate(0)" : "rotate(-90deg)", 
+              transition: "transform 0.2s" 
+            }} 
+          />
+        </button>
+        <div 
+          onClick={() => onToggleFolder(folder.id)} 
+          style={{ flex: 1, display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" }}
+        >
+          {folder.is_global ? (
+            <Globe size={14} style={{ color: isSelected ? "var(--accent)" : "var(--accent-mid)", flexShrink: 0 }} />
+          ) : (
+            <Database size={14} style={{ color: isSelected ? "var(--accent)" : "var(--text2)", flexShrink: 0 }} />
+          )}
+          <span style={{ fontSize: "13px", fontWeight: 600, color: isSelected ? "var(--accent)" : "var(--text)" }}>
+            {folder.name}
+          </span>
+          {folder.is_global && (
+            <span style={{ fontSize: "9px", fontWeight: 700, padding: "1px 5px", borderRadius: "4px", background: "var(--accent-light)", color: "var(--accent)" }}>
+              GLOBAL
+            </span>
+          )}
+          <span style={{ fontSize: "11px", color: "var(--text3)" }}>
+            ({folder.document_count} files)
+          </span>
+        </div>
+        {isSelected && <CheckCircle size={14} style={{ color: "var(--accent)", flexShrink: 0 }} />}
+      </div>
+
+      {isExpanded && (
+        <>
+          {/* Nested subfolders */}
+          {childFolders.map((child: any) => (
+            <VaultFolderItem
+              key={child.id}
+              folder={child}
+              allFolders={allFolders}
+              level={level + 1}
+              expanded={expanded}
+              onToggleExpand={onToggleExpand}
+              selectedFolderIds={selectedFolderIds}
+              onToggleFolder={onToggleFolder}
+              selectedDocs={selectedDocs}
+              onToggleDoc={onToggleDoc}
+            />
+          ))}
+
+          {/* Files directly inside this folder */}
+          <VaultFolderFiles 
+            folderId={folder.id} 
+            folderName={folder.name} 
+            level={level}
+            selectedDocs={selectedDocs} 
+            onToggleDoc={onToggleDoc} 
+          />
+        </>
+      )}
+    </div>
+  );
+}
+
+function VaultFolderFiles({ folderId, folderName, level = 0, selectedDocs, onToggleDoc }: {
+  folderId: string; folderName: string; level?: number; selectedDocs: DocItem[]; onToggleDoc: (doc: DocItem) => void;
 }) {
   const { data: docs = [] } = useQuery({
     queryKey: ["docs-in-folder", folderId],
@@ -541,17 +679,19 @@ function VaultFolderFiles({ folderId, folderName, selectedDocs, onToggleDoc }: {
   });
 
   if (docs.length === 0) return (
-    <div style={{ padding: "6px 14px 6px 38px", color: "var(--text3)", fontSize: "12px" }}>No documents in this folder</div>
+    <div style={{ padding: "4px 14px 4px", paddingLeft: `${34 + level * 20}px`, color: "var(--text3)", fontSize: "11px" }}>
+      No documents in this folder
+    </div>
   );
 
   return (
-    <div style={{ paddingLeft: "30px", paddingBottom: "4px", display: "flex", flexDirection: "column", gap: "2px" }}>
+    <div style={{ paddingLeft: `${30 + level * 20}px`, paddingBottom: "2px", display: "flex", flexDirection: "column", gap: "2px" }}>
       {docs.map((d: any) => {
         const sel = selectedDocs.some(s => s.id === d.id);
         return (
-          <div key={d.id} onClick={() => onToggleDoc({ id: d.id, name: d.name, folder_name: folderName })} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "7px 10px", borderRadius: "8px", background: sel ? "var(--accent-light)" : "transparent", cursor: "pointer", transition: "background 0.15s" }}>
+          <div key={d.id} onClick={() => onToggleDoc({ id: d.id, name: d.name, folder_name: folderName })} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "6px 10px", borderRadius: "8px", background: sel ? "var(--accent-light)" : "transparent", cursor: "pointer", transition: "background 0.15s" }}>
             <FileText size={13} style={{ color: sel ? "var(--accent)" : "var(--text3)", flexShrink: 0 }} />
-            <span style={{ fontSize: "13px", fontWeight: sel ? 600 : 400, color: sel ? "var(--accent)" : "var(--text)", flex: 1 }}>{d.name}</span>
+            <span style={{ fontSize: "12.5px", fontWeight: sel ? 600 : 400, color: sel ? "var(--accent)" : "var(--text)", flex: 1 }}>{d.name}</span>
             {sel && <CheckCircle size={13} style={{ color: "var(--accent)", flexShrink: 0 }} />}
           </div>
         );

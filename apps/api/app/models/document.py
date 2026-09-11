@@ -12,6 +12,7 @@ class DocumentBase(SQLModel):
     name: str
     folder_id: str = Field(foreign_key="folders.id", index=True)
     owner_id: str = Field(foreign_key="users.id", index=True)
+    is_global: bool = Field(default=False)
     content_type: str = "application/pdf"
     size_bytes: int = 0
     language: Optional[str] = None
